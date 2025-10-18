@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import logging
 import os
 import tempfile
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import Path
+from itertools import product
 from typing import Generator, Optional
 
 import numpy as np
@@ -218,7 +219,7 @@ def _infer_v1(pipe: object, text: str, profile: VoiceProfile, out_sr: int) -> np
     errors: list[Exception] = []
     for ref_path, ref_prompt in candidates:
         try:
-            result = _call_infer(pipe, text, ref_path, ref_prompt)
+            result = _call_infer(pipe, text, ref_path, ref_prompt, profile)
         except Exception as exc:  # pragma: no cover - runtime guard
             errors.append(exc)
             result = None
@@ -240,29 +241,174 @@ def _infer_v1(pipe: object, text: str, profile: VoiceProfile, out_sr: int) -> np
         return audio.astype(np.float32, copy=False)
 
     if errors:
-        LOGGER.warning("F5 inference failed after %s attempt(s); returning silence", len(errors))
+        for idx, exc in enumerate(errors, 1):
+            LOGGER.debug("F5 inference attempt %s failed", idx, exc_info=exc)
+        LOGGER.warning(
+            "F5 inference failed after %s attempt(s); returning silence", len(errors)
+        )
     return np.array([], dtype=np.float32)
 
 
 def _call_infer(
-    pipe: object, text: str, ref_path: str | None, ref_text: str
+    pipe: object,
+    text: str,
+    ref_path: str | None,
+    ref_text: str,
+    profile: VoiceProfile,
 ) -> object | None:
-    show_info = lambda *args, **kwargs: None  # noqa: E731 - inline stub suppressing console logs
-    progress = _SilentProgress()
-    kwargs = {"gen_text": text, "show_info": show_info, "progress": progress}
-    if ref_path is not None:
-        kwargs.update({"ref_file": ref_path, "ref_text": ref_text})
+    infer = getattr(pipe, "infer")
     try:
-        return pipe.infer(**kwargs)
-    except TypeError as exc:
-        if ref_path is not None:
-            with contextlib.suppress(TypeError):
-                return pipe.infer(ref_path, ref_text, text)
-            with contextlib.suppress(TypeError):
-                return pipe.infer(ref_path, text)
+        signature = inspect.signature(infer)
+    except (TypeError, ValueError):  # pragma: no cover - dynamic/built-in callables
+        signature = None
+
+    params = signature.parameters if signature else {}
+    accepts_kwargs = (
+        any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+        if signature
+        else True
+    )
+
+    def _accepts(name: str) -> bool:
+        return bool(name) and (accepts_kwargs or name in params)
+
+    def _variant_map(value: object, names: list[str]) -> list[dict[str, object]]:
+        variants: list[dict[str, object]] = []
+        for candidate in names:
+            if _accepts(candidate):
+                variants.append({candidate: value})
+        return variants
+
+    text_variants = _variant_map(
+        text,
+        ["gen_text", "text", "prompt", "prompt_text", "tts_text", "target_text"],
+    )
+    if not text_variants:
+        fallback_key = "gen_text" if _accepts("gen_text") else "text"
+        text_variants = [{fallback_key: text}]
+
+    clean_ref = (ref_text or "").strip()
+    prompt_variants = (
+        _variant_map(clean_ref, ["ref_text", "prompt_ref", "reference_text", "text_ref"])
+        if clean_ref
+        else [{}]
+    ) or [{}]
+
+    style_text = getattr(profile, "style_notes", "") or ""
+    style_variants = (
+        _variant_map(style_text, ["prompt_style", "style", "style_text", "persona"])
+        if style_text
+        else [{}]
+    ) or [{}]
+
+    path_variants = [{}]
+    if ref_path:
+        str_path = str(ref_path)
+        path_variants = _variant_map(
+            str_path,
+            [
+                "ref_file",
+                "ref_path",
+                "ref_audio_path",
+                "ref_wav_path",
+                "reference_path",
+                "ref_audio_file",
+                "prompt_wav",
+                "ref_speaker_path",
+            ],
+        ) or [{}]
+
+    wav = getattr(profile, "speaker_wav", None)
+    sr = int(getattr(profile, "speaker_sr", 0) or 0)
+    audio_variants: list[dict[str, object]] = [{}]
+    sr_variants: list[dict[str, object]] = [{}]
+    dict_variants: list[dict[str, object]] = [{}]
+    if wav is not None and np.size(wav) > 0:
+        wav = np.asarray(wav, dtype=np.float32).reshape(-1)
+        audio_variants = _variant_map(
+            wav,
+            [
+                "ref_audio",
+                "ref_wav",
+                "speaker_audio",
+                "voice_sample",
+                "voice_samples",
+                "ref_speaker",
+                "ref_waveform",
+            ],
+        ) or [{}]
+        for variant in audio_variants:
+            if "voice_samples" in variant and not isinstance(variant["voice_samples"], (list, tuple)):
+                variant["voice_samples"] = [variant["voice_samples"]]
+        if sr > 0:
+            sr_variants = _variant_map(
+                sr,
+                ["ref_sr", "sr", "speaker_sr", "sample_rate", "ref_sample_rate"],
+            ) or [{}]
+        payload = {"waveform": wav}
+        if sr > 0:
+            payload["sample_rate"] = sr
+        dict_candidates = _variant_map(payload, ["prompt_speech", "ref_audio_dict", "reference_audio"])
+        if dict_candidates:
+            dict_variants = dict_candidates
+
+    base_kwargs: dict[str, object] = {}
+    if _accepts("show_info"):
+        base_kwargs["show_info"] = lambda *args, **kwargs: None
+    if _accepts("progress"):
+        base_kwargs["progress"] = _SilentProgress()
+
+    combos: list[dict[str, object]] = []
+    for pieces in product(
+        text_variants,
+        prompt_variants,
+        style_variants,
+        path_variants,
+        audio_variants,
+        sr_variants,
+        dict_variants,
+    ):
+        merged = dict(base_kwargs)
+        for fragment in pieces:
+            merged.update({k: v for k, v in fragment.items() if v is not None})
+        combos.append(merged)
+
+    unique: list[dict[str, object]] = []
+    seen: set[tuple[tuple[str, object], ...]] = set()
+    for kwargs in combos:
+        normalized: list[tuple[str, object]] = []
+        for key, value in sorted(kwargs.items(), key=lambda item: item[0]):
+            try:
+                hash(value)
+            except TypeError:
+                normalized.append((key, id(value)))
+            else:
+                normalized.append((key, value))
+        normalized_key = tuple(normalized)
+        if normalized_key not in seen:
+            seen.add(normalized_key)
+            unique.append(kwargs)
+
+    last_type_error: TypeError | None = None
+    for kwargs in unique:
+        try:
+            return infer(**kwargs)
+        except TypeError as exc:
+            last_type_error = exc
+            continue
+
+    # Fallback to positional signatures for legacy builds.
+    with contextlib.suppress(TypeError):
+        return infer(text)
+    if ref_path is not None:
         with contextlib.suppress(TypeError):
-            return pipe.infer(text)
-        raise exc
+            return infer(ref_path, ref_text, text)
+        with contextlib.suppress(TypeError):
+            return infer(ref_path, text)
+
+    if last_type_error is not None:
+        raise last_type_error
+    raise TypeError("Unable to call infer with any supported signature")
 
 
 def _normalize_infer_result(pipe: object, result: object, out_sr: int) -> tuple[np.ndarray, int]:
@@ -331,12 +477,17 @@ def _load_packaged_reference() -> tuple[np.ndarray, int, str] | None:
 
     for candidate in _iter_traversable_wavs(root):
         try:
-            with resources.as_file(candidate) as wav_path:
-                wav, sr = _read_wav_file(wav_path)
-                transcript = ""
-                text_path = wav_path.with_suffix(".txt")
-                if text_path.exists():
-                    transcript = text_path.read_text(encoding="utf-8").strip()
+            wav_bytes = candidate.read_bytes()
+        except Exception:
+            continue
+
+        transcript = ""
+        with contextlib.suppress(Exception):
+            text_resource = candidate.with_suffix(".txt")
+            transcript = (text_resource.read_text(encoding="utf-8") or "").strip()
+
+        try:
+            wav, sr = _read_wav_bytes(wav_bytes)
         except Exception:
             continue
         if wav.size == 0:
@@ -346,16 +497,17 @@ def _load_packaged_reference() -> tuple[np.ndarray, int, str] | None:
     return None
 
 
-def _read_wav_file(path: Path) -> tuple[np.ndarray, int]:
+def _read_wav_bytes(data: bytes) -> tuple[np.ndarray, int]:
+    buffer = BytesIO(data)
     if sf is not None:
-        audio, sr = sf.read(str(path), dtype="float32")
+        audio, sr = sf.read(buffer, dtype="float32")
     else:  # pragma: no cover - fallback path
         import wave
 
-        with wave.open(str(path), "rb") as wav_file:
+        with wave.open(buffer, "rb") as wav_file:
             sr = wav_file.getframerate()
             frames = wav_file.readframes(wav_file.getnframes())
-            audio = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32767.0
+        audio = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32767.0
 
     audio = np.asarray(audio, dtype=np.float32)
     if audio.ndim > 1:
