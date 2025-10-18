@@ -221,7 +221,15 @@ def _infer_v1(pipe: object, text: str, profile: VoiceProfile, out_sr: int) -> np
         try:
             result = _call_infer(pipe, text, ref_path, ref_prompt, profile)
         except Exception as exc:  # pragma: no cover - runtime guard
+            attempt_no = len(errors) + 1
             errors.append(exc)
+            LOGGER.error(
+                "F5 inference attempt %s failed with %s: %s",
+                attempt_no,
+                exc.__class__.__name__,
+                exc,
+                exc_info=exc,
+            )
             result = None
         finally:
             if ref_path:
@@ -241,8 +249,6 @@ def _infer_v1(pipe: object, text: str, profile: VoiceProfile, out_sr: int) -> np
         return audio.astype(np.float32, copy=False)
 
     if errors:
-        for idx, exc in enumerate(errors, 1):
-            LOGGER.debug("F5 inference attempt %s failed", idx, exc_info=exc)
         LOGGER.warning(
             "F5 inference failed after %s attempt(s); returning silence", len(errors)
         )
@@ -412,6 +418,37 @@ def _call_infer(
 
 
 def _normalize_infer_result(pipe: object, result: object, out_sr: int) -> tuple[np.ndarray, int]:
+    if isinstance(result, dict):
+        audio_value: object | None = None
+        for key in (
+            "audio",
+            "audios",
+            "waveform",
+            "waveforms",
+            "samples",
+            "audio_data",
+            "tts_audio",
+        ):
+            if key not in result:
+                continue
+            audio_value = result[key]
+            if key in {"audios", "waveforms"} and isinstance(audio_value, (list, tuple)):
+                audio_value = audio_value[0] if audio_value else None
+            break
+
+        if audio_value is None:
+            raise ValueError("Infer result dictionary did not contain audio samples")
+
+        sr_value: object | None = None
+        for key in ("sample_rate", "sampling_rate", "sr", "audio_sr", "sampleRate"):
+            if key in result:
+                sr_value = result[key]
+                break
+
+        audio = np.array(audio_value, dtype=np.float32).reshape(-1)
+        native_sr = int(sr_value) if sr_value else getattr(pipe, "target_sample_rate", out_sr)
+        return audio, native_sr
+
     if not isinstance(result, tuple):
         audio = np.array(result, dtype=np.float32).reshape(-1)
         native_sr = getattr(pipe, "target_sample_rate", out_sr)
