@@ -45,7 +45,6 @@ if _version_tuple(gradio.__version__) < MIN_GRADIO_VERSION:  # pragma: no cover 
     )
 
 
-<<<<<<< HEAD
 try:
     from fastrtc import ReplyOnPause, Stream
 except ModuleNotFoundError as exc:  # pragma: no cover - import-time guard
@@ -57,8 +56,6 @@ except ModuleNotFoundError as exc:  # pragma: no cover - import-time guard
         ) from exc
     raise
 
-=======
->>>>>>> main
 from .config import get_settings
 from .llm_client import LLMClient
 from .persona import PERSONA_QUESTIONS, PersonaState, build_persona_system_prompt
