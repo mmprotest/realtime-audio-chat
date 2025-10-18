@@ -7,7 +7,11 @@ from io import BytesIO
 from typing import Generator, Optional
 
 import numpy as np
-import soundfile as sf
+
+try:  # pragma: no cover - dependency import is trivial when present
+    import soundfile as sf
+except Exception:  # pragma: no cover - exercised when soundfile missing
+    sf = None
 
 LOGGER = logging.getLogger(__name__)
 
@@ -84,9 +88,38 @@ class F5Cloner:
         for start in range(0, audio_np.size, chunk_samples):
             end = min(start + chunk_samples, audio_np.size)
             chunk = audio_np[start:end]
-            buffer = BytesIO()
-            sf.write(buffer, chunk, out_sr, format="WAV", subtype="PCM_16")
-            yield buffer.getvalue()
+            yield _encode_wav(chunk, out_sr)
+
+
+def _encode_wav(chunk: np.ndarray, sr: int) -> bytes:
+    """Encode the provided samples into a mono 16-bit WAV payload."""
+
+    buffer = BytesIO()
+    if sf is not None:
+        sf.write(buffer, chunk, sr, format="WAV", subtype="PCM_16")
+        return buffer.getvalue()
+
+    import struct
+    import wave
+
+    samples = [float(x) for x in chunk]
+    # Clamp to [-1, 1] before scaling to 16-bit PCM
+    pcm = [
+        max(-32768, min(32767, int(round(sample * 32767.0))))
+        for sample in (_clamp(sample, -1.0, 1.0) for sample in samples)
+    ]
+
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sr)
+        wav_file.writeframes(b"".join(struct.pack("<h", value) for value in pcm))
+
+    return buffer.getvalue()
+
+
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    return minimum if value < minimum else maximum if value > maximum else value
 
 
 __all__ = ["VoiceProfile", "F5Cloner"]
