@@ -32,10 +32,10 @@ class Settings:
     device: str
     f5_output_sr: int
     chunk_ms: int
-    fastrtc_mode: str
-    fastrtc_modality: str
-    panel_host: str
-    panel_port: int
+    ui_host: str
+    ui_port: int
+    ui_share: bool
+    ui_inbrowser: bool
 
 
 def _cuda_available() -> bool:
@@ -62,6 +62,18 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _to_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    normalized = value.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    LOGGER.warning("Unrecognized boolean value '%s'; using default=%s", value, default)
+    return default
+
+
 def _load_settings(argv: tuple[str, ...]) -> Settings:
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--cpu", action="store_true", help="Force CPU inference even if CUDA is available")
@@ -79,18 +91,20 @@ def _load_settings(argv: tuple[str, ...]) -> Settings:
         device=_get_env("DEVICE", default_device) or default_device,
         f5_output_sr=int(_get_env("F5_OUTPUT_SR", "24000") or 24000),
         chunk_ms=int(_get_env("CHUNK_MS", "200") or 200),
-        fastrtc_mode=_get_env("FASTRTC_MODE", "send-receive") or "send-receive",
-        fastrtc_modality=_get_env("FASTRTC_MODALITY", "audio") or "audio",
-        panel_host=_get_env("PANEL_HOST", "0.0.0.0") or "0.0.0.0",
-        panel_port=int(_get_env("PANEL_PORT", "7862") or 7862),
+        ui_host=_get_env("UI_HOST", "0.0.0.0") or "0.0.0.0",
+        ui_port=int(_get_env("UI_PORT", "7860") or 7860),
+        ui_share=_to_bool(_get_env("UI_SHARE"), False),
+        ui_inbrowser=_to_bool(_get_env("UI_OPEN_BROWSER"), False),
     )
 
     LOGGER.info(
-        "Loaded settings | device=%s model=%s base_url=%s chunk_ms=%s",
+        "Loaded settings | device=%s model=%s base_url=%s chunk_ms=%s ui_host=%s ui_port=%s",
         settings.device,
         settings.openai_model,
         settings.openai_base_url or "default",
         settings.chunk_ms,
+        settings.ui_host,
+        settings.ui_port,
     )
     return settings
 
