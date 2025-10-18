@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import atexit
 import logging
+from dataclasses import dataclass
 from io import BytesIO
 from typing import Generator, Iterable, List, Tuple
 
@@ -50,12 +51,199 @@ from .persona import PERSONA_QUESTIONS, PersonaState, build_persona_system_promp
 from .stt_wrapper import get_stt
 from .tts.f5_wrapper import F5Cloner, VoiceProfile
 
+try:  # Optional import for pause detection extras
+    from fastrtc.pause_detection import SileroVadOptions, get_silero_model
+except Exception:  # pragma: no cover - runtime guard when extras missing
+    SileroVadOptions = None  # type: ignore[assignment]
+    get_silero_model = None  # type: ignore[assignment]
+
 LOGGER = logging.getLogger(__name__)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
+if get_silero_model is None or SileroVadOptions is None:  # pragma: no cover - runtime guard
+    raise RuntimeError(
+        "FastRTC pause detection extras are required. Install fastrtc[vad] to enable realtime silence detection.",
+    )
+
+
+def _summarize_audio(data: np.ndarray, sr: int) -> str:
+    samples = data.shape[0]
+    channels = 1 if data.ndim == 1 else data.shape[1]
+    duration = samples / float(sr)
+    return f"Loaded sample: {duration:.2f}s @ {sr}Hz ({channels} channel{'s' if channels != 1 else ''})"
+
+
+def _decode_wav_chunk(payload: bytes) -> np.ndarray:
+    if not payload:
+        return np.array([], dtype=np.float32)
+    if sf is not None:
+        audio, _ = sf.read(BytesIO(payload), dtype="float32")
+    else:  # pragma: no cover - fallback path when soundfile missing
+        import wave
+
+        with wave.open(BytesIO(payload), "rb") as wav_file:
+            frames = wav_file.readframes(wav_file.getnframes())
+            audio = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32767.0
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+    return audio.astype(np.float32, copy=False)
+
+
+def _build_voice_profile(
+    source: VoiceProfile,
+    *,
+    speaker_wav: np.ndarray | None = None,
+    speaker_sr: int | None = None,
+    style_notes: str | None = None,
+) -> VoiceProfile:
+    return VoiceProfile(
+        speaker_wav=speaker_wav if speaker_wav is not None else source.speaker_wav,
+        speaker_sr=speaker_sr if speaker_sr is not None else source.speaker_sr,
+        style_notes=style_notes if style_notes is not None else source.style_notes,
+    )
+
+
+@dataclass
+class PauseAlgoOptions:
+    """Algorithm tuning parameters for pause detection."""
+
+    audio_chunk_duration: float = 0.6
+    started_talking_threshold: float = 0.2
+    speech_threshold: float = 0.1
+    max_continuous_speech_s: float = float("inf")
+
+
+@dataclass
+class PauseState:
+    """Runtime state for the pause detector."""
+
+    buffer: np.ndarray | None = None
+    stream: np.ndarray | None = None
+    sampling_rate: int = 0
+    started_talking: bool = False
+
+
+class PauseDetector:
+    """Lightweight wrapper around FastRTC's Silero VAD model."""
+
+    def __init__(
+        self,
+        algo_options: PauseAlgoOptions | None = None,
+        model_options: SileroVadOptions | None = None,
+    ) -> None:
+        if get_silero_model is None or SileroVadOptions is None:  # pragma: no cover - runtime guard
+            raise RuntimeError(
+                "FastRTC pause detection extras are required. Install fastrtc[vad] to enable silence detection.",
+            )
+        self._algo = algo_options or PauseAlgoOptions()
+        self._model_options = model_options or SileroVadOptions()
+        self._model = get_silero_model()
+        self._state = PauseState()
+
+    @staticmethod
+    def _to_mono(data: np.ndarray) -> np.ndarray:
+        array = np.asarray(data)
+        if array.ndim > 1:
+            array = np.mean(array, axis=1)
+        return array.astype(np.float32, copy=False)
+
+    @staticmethod
+    def _resample(data: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
+        if orig_sr == target_sr:
+            return data
+        try:  # pragma: no cover - optional dependency
+            import librosa
+
+            resampled = librosa.resample(data, orig_sr=orig_sr, target_sr=target_sr)
+            return resampled.astype(np.float32, copy=False)
+        except Exception:
+            # Fall back to linear interpolation when librosa is unavailable.
+            ratio = target_sr / float(orig_sr)
+            if ratio == 0:
+                return data
+            x_old = np.arange(data.size, dtype=np.float32)
+            x_new = np.arange(0, data.size * ratio, 1, dtype=np.float32) / ratio
+            resampled = np.interp(x_new[: int(data.size * ratio)], x_old, data)
+            return resampled.astype(np.float32, copy=False)
+
+    def reset(self) -> None:
+        self._state = PauseState()
+
+    def _current_rate(self, sr: int) -> int:
+        if not self._state.sampling_rate:
+            self._state.sampling_rate = sr
+        return self._state.sampling_rate
+
+    def _update_buffer(self, sr: int, data: np.ndarray) -> None:
+        target_sr = self._current_rate(sr)
+        if sr != target_sr:
+            data = self._resample(data, sr, target_sr)
+        if self._state.buffer is None:
+            self._state.buffer = data
+        else:
+            self._state.buffer = np.concatenate((self._state.buffer, data))
+
+    def _should_emit(self) -> bool:
+        buffer = self._state.buffer
+        sr = self._state.sampling_rate
+        if buffer is None or buffer.size == 0 or sr == 0:
+            return False
+        duration = buffer.size / float(sr)
+        if duration < self._algo.audio_chunk_duration:
+            return False
+        speech_duration, _ = self._model.vad((sr, buffer), self._model_options)
+        if speech_duration > self._algo.started_talking_threshold and not self._state.started_talking:
+            self._state.started_talking = True
+        if self._state.started_talking:
+            if self._state.stream is None:
+                self._state.stream = buffer.copy()
+            else:
+                self._state.stream = np.concatenate((self._state.stream, buffer))
+            current_duration = self._state.stream.size / float(sr)
+            if current_duration >= self._algo.max_continuous_speech_s:
+                self._state.buffer = None
+                return True
+        self._state.buffer = None
+        if self._state.started_talking and speech_duration < self._algo.speech_threshold:
+            return True
+        return False
+
+    def accept(self, audio: Tuple[int, np.ndarray]) -> Tuple[bool, Tuple[int, np.ndarray] | None]:
+        sr, data = audio
+        mono = self._to_mono(data)
+        if mono.size == 0:
+            return False, None
+        self._update_buffer(sr, mono)
+        if not self._should_emit():
+            return False, None
+        if self._state.stream is None:
+            payload = np.array([], dtype=np.float32)
+        else:
+            payload = self._state.stream.astype(np.float32, copy=False)
+        sample_rate = self._state.sampling_rate
+        self.reset()
+        return True, (sample_rate, payload)
+
+    def flush(self) -> Tuple[int, np.ndarray] | None:
+        if self._state.stream is not None and self._state.stream.size > 0:
+            payload = self._state.stream.astype(np.float32, copy=False)
+            sr = self._state.sampling_rate
+            self.reset()
+            return sr, payload
+        if (
+            self._state.started_talking
+            and self._state.buffer is not None
+            and self._state.buffer.size > 0
+        ):
+            payload = self._state.buffer.astype(np.float32, copy=False)
+            sr = self._state.sampling_rate
+            self.reset()
+            return sr, payload
+        self.reset()
+        return None
 
 def _summarize_audio(data: np.ndarray, sr: int) -> str:
     samples = data.shape[0]
@@ -107,13 +295,14 @@ def main(argv: list[str] | None = None) -> None:
             # Realtime audio assistant
             1. Upload a reference voice clip (or record one) for zero-shot cloning.
             2. Describe persona cues to steer the assistant's responses.
-            3. Hold to record, release to send, and hear the cloned reply stream back.
+            3. Press record to speak — silence detection will transcribe and respond automatically.
             """
         )
 
         voice_state = gr.State(VoiceProfile())
         persona_state = gr.State(PersonaState())
         history_state = gr.State([])
+        pause_state = gr.State(None)
 
         with gr.Row():
             with gr.Column(scale=2):
@@ -121,11 +310,14 @@ def main(argv: list[str] | None = None) -> None:
                 audio_input = gr.Audio(
                     sources=["microphone"],
                     type="numpy",
-                    label="Speak to the assistant",
+                    label="Realtime microphone",
+                    streaming=True,
+                    show_download_button=False,
                 )
-                with gr.Row():
-                    submit_button = gr.Button("Send", variant="primary")
-                    clear_button = gr.Button("Clear conversation")
+                detection_status = gr.Markdown(
+                    "Click the microphone to start speaking. We'll listen for pauses to respond."
+                )
+                clear_button = gr.Button("Clear conversation")
                 user_text = gr.Textbox(label="Recognized speech", interactive=False)
                 assistant_text = gr.Textbox(label="Assistant reply", interactive=False)
                 audio_output = gr.Audio(
@@ -212,7 +404,7 @@ def main(argv: list[str] | None = None) -> None:
                     accumulated = np.concatenate((accumulated, decoded))
                 yield settings.f5_output_sr, accumulated
 
-        def on_conversation(
+        def process_turn(
             audio: Tuple[int, np.ndarray] | None,
             voice: VoiceProfile,
             persona: PersonaState,
@@ -221,14 +413,19 @@ def main(argv: list[str] | None = None) -> None:
             if not audio:
                 return history, "", "", None, history
             sr, data = audio
-            if data is None or getattr(data, "size", 0) == 0:
+            if sr <= 0:
                 return history, "", "", None, history
-            transcription = ""
+            array = np.asarray(data)
+            if array.size == 0:
+                return history, "", "", None, history
+            if array.ndim > 1:
+                array = np.mean(array, axis=1)
+            array = array.astype(np.float32, copy=False)
             try:
-                transcription = stt.transcribe((sr, data))
+                transcription = stt.transcribe((sr, array))
             except Exception:  # pragma: no cover - runtime safety
                 LOGGER.exception("STT failure")
-                return history, "", "", None, history
+                return history, "", "Speech recognition failed.", None, history
 
             transcription = (transcription or "").strip()
             if not transcription:
@@ -257,18 +454,106 @@ def main(argv: list[str] | None = None) -> None:
             audio_stream = synthesize_stream(reply_text, voice)
             return new_history, transcription, reply_text, audio_stream, new_history
 
-        submit_button.click(
-            on_conversation,
-            inputs=[audio_input, voice_state, persona_state, history_state],
-            outputs=[conversation, user_text, assistant_text, audio_output, history_state],
+        def on_audio_stream(
+            audio: Tuple[int, np.ndarray] | None,
+            voice: VoiceProfile,
+            persona: PersonaState,
+            history: List[Tuple[str, str]],
+            detector: PauseDetector | None,
+        ):
+            if detector is None:
+                detector = PauseDetector()
+            if audio is None:
+                return (
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    history,
+                    detector,
+                )
+            emitted, payload = detector.accept(audio)
+            if not emitted or payload is None:
+                return (
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    history,
+                    detector,
+                )
+            history_out, transcript, reply_text, audio_stream, updated_history = process_turn(
+                payload,
+                voice,
+                persona,
+                history,
+            )
+            return (
+                history_out,
+                transcript,
+                reply_text,
+                audio_stream,
+                updated_history,
+                detector,
+            )
+
+        def on_recording_stop(
+            voice: VoiceProfile,
+            persona: PersonaState,
+            history: List[Tuple[str, str]],
+            detector: PauseDetector | None,
+        ):
+            if detector is None:
+                detector = PauseDetector()
+            payload = detector.flush()
+            if not payload:
+                return (
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    gr.update(),
+                    history,
+                    detector,
+                )
+            history_out, transcript, reply_text, audio_stream, updated_history = process_turn(
+                payload,
+                voice,
+                persona,
+                history,
+            )
+            return (
+                history_out,
+                transcript,
+                reply_text,
+                audio_stream,
+                updated_history,
+                detector,
+            )
+
+        def clear_conversation(
+            detector: PauseDetector | None,
+        ) -> Tuple[List[Tuple[str, str]], str, str, None, List[Tuple[str, str]], PauseDetector]:
+            if detector is None:
+                detector = PauseDetector()
+            detector.reset()
+            return [], "", "", None, [], detector
+
+        audio_input.stream(
+            on_audio_stream,
+            inputs=[audio_input, voice_state, persona_state, history_state, pause_state],
+            outputs=[conversation, user_text, assistant_text, audio_output, history_state, pause_state],
         )
 
-        def clear_conversation() -> Tuple[List[Tuple[str, str]], str, str, None, List[Tuple[str, str]]]:
-            return [], "", "", None, []
+        audio_input.stop_recording(
+            on_recording_stop,
+            inputs=[voice_state, persona_state, history_state, pause_state],
+            outputs=[conversation, user_text, assistant_text, audio_output, history_state, pause_state],
+        )
 
         clear_button.click(
             clear_conversation,
-            outputs=[conversation, user_text, assistant_text, audio_output, history_state],
+            inputs=[pause_state],
+            outputs=[conversation, user_text, assistant_text, audio_output, history_state, pause_state],
         )
 
     LOGGER.info(
