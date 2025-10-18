@@ -221,7 +221,15 @@ def _infer_v1(pipe: object, text: str, profile: VoiceProfile, out_sr: int) -> np
         try:
             result = _call_infer(pipe, text, ref_path, ref_prompt, profile)
         except Exception as exc:  # pragma: no cover - runtime guard
+            attempt_no = len(errors) + 1
             errors.append(exc)
+            LOGGER.error(
+                "F5 inference attempt %s failed with %s: %s",
+                attempt_no,
+                exc.__class__.__name__,
+                exc,
+                exc_info=exc,
+            )
             result = None
         finally:
             if ref_path:
@@ -241,8 +249,6 @@ def _infer_v1(pipe: object, text: str, profile: VoiceProfile, out_sr: int) -> np
         return audio.astype(np.float32, copy=False)
 
     if errors:
-        for idx, exc in enumerate(errors, 1):
-            LOGGER.debug("F5 inference attempt %s failed", idx, exc_info=exc)
         LOGGER.warning(
             "F5 inference failed after %s attempt(s); returning silence", len(errors)
         )

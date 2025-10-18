@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 
 from src.tts.f5_wrapper import F5Cloner, VoiceProfile
@@ -45,3 +47,26 @@ def test_stream_tts_sync_handles_dict_infer_result(monkeypatch):
     chunks = list(cloner.stream_tts_sync("Testing dict output", profile, out_sr=24000, chunk_ms=200))
     assert len(chunks) > 0
     assert all(chunk.startswith(b"RIFF") for chunk in chunks)
+
+
+def test_infer_logs_errors(caplog):
+    class ExplodingInferPipe:
+        def infer(self, **kwargs):  # noqa: D401
+            raise RuntimeError("pipeline boom")
+
+    cloner = F5Cloner(device="cpu")
+    cloner._pipe = ExplodingInferPipe()
+    profile = VoiceProfile(speaker_wav=None, speaker_sr=None)
+
+    with caplog.at_level(logging.ERROR):
+        chunks = list(
+            cloner.stream_tts_sync(
+                "Should fail",
+                profile,
+                out_sr=24000,
+                chunk_ms=200,
+            )
+        )
+
+    assert chunks == []
+    assert any("pipeline boom" in message for message in caplog.messages)
