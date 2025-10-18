@@ -70,3 +70,40 @@ def test_infer_logs_errors(caplog):
 
     assert chunks == []
     assert any("pipeline boom" in message for message in caplog.messages)
+
+
+def test_infer_requires_reference_skips_optional_fallback(caplog):
+    class ReferencePipe:
+        def __init__(self):
+            self.calls = 0
+
+        def infer(self, ref_file, ref_text, gen_text):  # noqa: D401
+            self.calls += 1
+            raise ValueError("ffmpeg missing")
+
+    pipe = ReferencePipe()
+    cloner = F5Cloner(device="cpu")
+    cloner._pipe = pipe
+    profile = VoiceProfile(
+        speaker_wav=np.ones(4000, dtype=np.float32),
+        speaker_sr=24000,
+        reference_text="Sample",
+    )
+
+    with caplog.at_level(logging.ERROR):
+        chunks = list(
+            cloner.stream_tts_sync(
+                "Trigger failure",
+                profile,
+                out_sr=24000,
+                chunk_ms=200,
+            )
+        )
+
+    assert chunks == []
+    assert pipe.calls == 1
+    assert any("ffmpeg missing" in message for message in caplog.messages)
+    assert not any(
+        "missing 2 required positional arguments" in message
+        for message in caplog.messages
+    )
