@@ -469,12 +469,56 @@ def _load_packaged_reference() -> tuple[np.ndarray, int, str] | None:
         except Exception:
             return None
 
+    try:
+        import tomllib  # type: ignore[attr-defined]
+    except Exception:  # pragma: no cover - fallback for <=3.10
+        try:  # pragma: no cover - dependency-light fallback
+            import tomli as tomllib  # type: ignore
+        except Exception:
+            tomllib = None  # type: ignore
+
     package = "f5_tts.infer.examples"
     try:
         root = resources.files(package)
     except Exception:
         return None
 
+    # Prefer reading the example manifests (``*.toml``) because they contain
+    # canonical reference transcripts.  This keeps us from hitting Whisper
+    # transcription on user machines where the ASR dependencies may be
+    # unavailable or slow.
+    if tomllib is not None:
+        for manifest in _iter_traversable_matching(root, ".toml"):
+            try:
+                data = manifest.read_bytes()
+            except Exception:
+                continue
+            try:
+                config = tomllib.loads(data.decode("utf-8"))
+            except Exception:
+                continue
+
+            ref_audio_path = config.get("ref_audio")
+            ref_text = (config.get("ref_text") or "").strip()
+            if not ref_audio_path:
+                continue
+
+            try:
+                wav_bytes = root.joinpath(ref_audio_path).read_bytes()
+            except Exception:
+                continue
+
+            try:
+                wav, sr = _read_wav_bytes(wav_bytes)
+            except Exception:
+                continue
+            if wav.size == 0:
+                continue
+
+            return wav, sr, ref_text
+
+    # Fall back to scanning for standalone ``.wav`` files paired with ``.txt``
+    # transcripts when manifests are unavailable.
     for candidate in _iter_traversable_wavs(root):
         try:
             wav_bytes = candidate.read_bytes()
@@ -572,6 +616,12 @@ def _resolve_f5_api():  # pragma: no cover - exercised only with dependency inst
 def _iter_traversable_wavs(root):
     """Iterate over ``*.wav`` files beneath an importlib.resources Traversable tree."""
 
+    yield from _iter_traversable_matching(root, ".wav")
+
+
+def _iter_traversable_matching(root, suffix: str):
+    """Iterate over Traversable entries that end with ``suffix``."""
+
     stack = [root]
     while stack:
         current = stack.pop()
@@ -586,10 +636,8 @@ def _iter_traversable_wavs(root):
                     stack.append(child)
                     continue
             except Exception:
-                # Some traversable implementations may not expose ``is_dir``;
-                # treat them conservatively as files.
                 pass
 
             name = getattr(child, "name", "")
-            if isinstance(name, str) and name.lower().endswith(".wav"):
+            if isinstance(name, str) and name.lower().endswith(suffix):
                 yield child
