@@ -24,7 +24,11 @@ class MoonshineSTT:
         if data is None or data.size == 0:
             return ""
         LOGGER.debug("Transcribing audio with sample_rate=%s length=%s", sr, data.shape)
-        result = self._model.transcribe((sr, data))
+        # FastRTC speech-to-text models expose a ``stt`` method rather than
+        # ``transcribe``. Call the canonical entry point so we remain
+        # compatible with the bundled Moonshine implementation the factory
+        # returns.
+        result = self._model.stt((sr, data))
         if isinstance(result, dict):
             return result.get("text", "")
         return str(result or "")

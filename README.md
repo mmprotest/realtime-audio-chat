@@ -6,8 +6,8 @@ Low-latency realtime audio assistant that combines Moonshine STT, OpenAI-compati
 - 🎤 Moonshine STT via FastRTC for responsive speech recognition.
 - 🤖 OpenAI-compatible chat responses (supports custom `OPENAI_BASE_URL`).
 - 🗣️ F5-TTS one-shot cloning with streaming 200 ms WAV chunks.
-- 🎚️ Persona side panel to upload a reference voice and describe conversational style.
-- 🔁 FastRTC “send-receive” chat interface for live audio conversations.
+- 🎚️ Gradio UI with integrated voice cloning and persona controls.
+- 🔁 Streaming assistant playback with configurable chunk size.
 
 ## Quickstart
 
@@ -44,6 +44,10 @@ Set at minimum:
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini        # change if desired
 OPENAI_BASE_URL=http://localhost:8000/v1   # optional for local server
+UI_HOST=0.0.0.0                 # optional UI host binding
+UI_PORT=7860                    # optional UI port
+UI_SHARE=false                  # set true to create a Gradio share link
+UI_OPEN_BROWSER=false           # set true to auto-open your browser
 ```
 
 ### Run the app
@@ -58,11 +62,11 @@ python -m src.app --cpu
 ```
 
 ### Using the realtime chat
-1. Open the FastRTC UI (terminal prints the URL) and allow microphone access.
-2. Visit the side panel at [http://localhost:7862](http://localhost:7862).
-3. Upload a 2–10 s clean reference voice clip. The assistant will mimic its tone.
-4. Describe conversational persona cues (tone, pacing, fillers, etc.) and save.
-5. Start speaking—Moonshine STT transcribes, the LLM responds, and F5-TTS streams cloned speech back within ~0.5–1.5 s on GPU.
+1. Start the app and visit the printed Gradio URL (defaults to <http://localhost:7860>). Allow microphone access.
+2. Upload or record a 2–10 s clean reference voice clip in the **Voice cloning** panel.
+3. Add optional persona cues (tone, pacing, fillers, cultural cues, etc.) and click **Save persona**.
+4. Hold the microphone record button, speak, then release — the pause detector automatically hands off the captured audio once you stop talking.
+5. Moonshine STT transcribes the audio, the OpenAI model replies, and F5-TTS streams cloned speech back in near realtime without any extra clicks.
 
 ### Latency tips
 - Prefer GPUs (`DEVICE=cuda`).
@@ -80,7 +84,8 @@ For sensitive deployments, optionally require the uploaded voice sample to conta
 - **CUDA not detected**: the app falls back to CPU automatically; ensure compatible Torch build is installed.
 - **Audio device errors**: close other audio apps or check system permissions.
 - **Windows script blocked**: use the `Set-ExecutionPolicy` command above, then rerun the setup script.
-- **FastRTC UI fails with `Component.__init__()` errors**: ensure `gradio==4.44.1` is installed (`pip install --upgrade gradio==4.44.1`). Older Gradio builds are incompatible with the bundled FastRTC components.
+- **Gradio errors about streaming audio**: ensure `gradio==4.44.1` (or newer) is installed (`pip install --upgrade gradio==4.44.1`).
+- **`ModuleNotFoundError: numpy.typing`**: remove any leftover local `numpy` folders (the project no longer ships a shim) and reinstall dependencies so Python picks up the packaged NumPy distribution (`pip install -r requirements.txt`).
 
 ## Project structure
 ```
