@@ -4,7 +4,20 @@ from __future__ import annotations
 import logging
 from typing import List
 
-from openai import OpenAI
+try:  # pragma: no cover - dependency import is trivial when available
+    from openai import OpenAI as _OpenAI
+except Exception:  # pragma: no cover - exercised in compatibility tests
+    _OpenAI = None
+
+
+class _MissingOpenAI:
+    def __init__(self, *_, **__):
+        raise RuntimeError(
+            "openai is not installed. Install the optional dependencies to enable LLM features."
+        )
+
+
+OpenAI = _OpenAI or _MissingOpenAI
 
 LOGGER = logging.getLogger(__name__)
 

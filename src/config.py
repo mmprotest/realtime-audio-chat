@@ -1,39 +1,41 @@
-"""Application configuration using Pydantic settings."""
+"""Application configuration helpers with minimal dependencies."""
 from __future__ import annotations
 
 import argparse
 import logging
 import os
+from dataclasses import dataclass
 from functools import lru_cache
 
-from dotenv import load_dotenv
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+try:  # pragma: no cover - optional dependency
+    from dotenv import load_dotenv
+except Exception:  # pragma: no cover - used when python-dotenv missing
+    def load_dotenv(*_, **__):
+        logging.getLogger(__name__).debug(
+            "python-dotenv not installed; skipping .env loading",
+            exc_info=True,
+        )
+        return False
 
 
+LOGGER = logging.getLogger(__name__)
 load_dotenv()
 
 
-class Settings(BaseSettings):
-    """Runtime configuration loaded from environment variables."""
+@dataclass(frozen=True, slots=True)
+class Settings:
+    """Runtime configuration sourced from environment variables."""
 
-    openai_api_key: str = Field(..., alias="OPENAI_API_KEY")
-    openai_base_url: str | None = Field(default=None, alias="OPENAI_BASE_URL")
-    openai_model: str = Field(default="gpt-4o-mini", alias="OPENAI_MODEL")
-    device: str = Field(default_factory=lambda: "cuda" if _cuda_available() else "cpu", alias="DEVICE")
-    f5_output_sr: int = Field(default=24000, alias="F5_OUTPUT_SR")
-    chunk_ms: int = Field(default=200, alias="CHUNK_MS")
-    fastrtc_mode: str = Field(default="send-receive", alias="FASTRTC_MODE")
-    fastrtc_modality: str = Field(default="audio", alias="FASTRTC_MODALITY")
-    panel_host: str = Field(default="0.0.0.0", alias="PANEL_HOST")
-    panel_port: int = Field(default=7862, alias="PANEL_PORT")
-
-    model_config = SettingsConfigDict(
-        case_sensitive=False,
-        env_file=".env",
-        env_file_encoding="utf-8",
-        frozen=True,
-    )
+    openai_api_key: str
+    openai_base_url: str | None
+    openai_model: str
+    device: str
+    f5_output_sr: int
+    chunk_ms: int
+    fastrtc_mode: str
+    fastrtc_modality: str
+    panel_host: str
+    panel_port: int
 
 
 def _cuda_available() -> bool:
@@ -42,8 +44,22 @@ def _cuda_available() -> bool:
 
         return bool(torch.cuda.is_available())
     except Exception:  # pragma: no cover - conservative fallback
-        logging.getLogger(__name__).debug("CUDA availability check failed", exc_info=True)
+        LOGGER.debug("CUDA availability check failed", exc_info=True)
         return False
+
+
+def _get_env(name: str, default: str | None = None) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value
+
+
+def _require_env(name: str) -> str:
+    value = _get_env(name)
+    if value is None:
+        raise RuntimeError(f"Environment variable {name} is required")
+    return value
 
 
 def _load_settings(argv: tuple[str, ...]) -> Settings:
@@ -54,8 +70,22 @@ def _load_settings(argv: tuple[str, ...]) -> Settings:
     if known_args.cpu:
         os.environ["DEVICE"] = "cpu"
 
-    settings = Settings()  # type: ignore[arg-type]
-    logging.getLogger(__name__).info(
+    default_device = "cuda" if _cuda_available() else "cpu"
+
+    settings = Settings(
+        openai_api_key=_require_env("OPENAI_API_KEY"),
+        openai_base_url=_get_env("OPENAI_BASE_URL"),
+        openai_model=_get_env("OPENAI_MODEL", "gpt-4o-mini"),
+        device=_get_env("DEVICE", default_device) or default_device,
+        f5_output_sr=int(_get_env("F5_OUTPUT_SR", "24000") or 24000),
+        chunk_ms=int(_get_env("CHUNK_MS", "200") or 200),
+        fastrtc_mode=_get_env("FASTRTC_MODE", "send-receive") or "send-receive",
+        fastrtc_modality=_get_env("FASTRTC_MODALITY", "audio") or "audio",
+        panel_host=_get_env("PANEL_HOST", "0.0.0.0") or "0.0.0.0",
+        panel_port=int(_get_env("PANEL_PORT", "7862") or 7862),
+    )
+
+    LOGGER.info(
         "Loaded settings | device=%s model=%s base_url=%s chunk_ms=%s",
         settings.device,
         settings.openai_model,
