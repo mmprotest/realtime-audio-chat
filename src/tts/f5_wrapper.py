@@ -412,6 +412,37 @@ def _call_infer(
 
 
 def _normalize_infer_result(pipe: object, result: object, out_sr: int) -> tuple[np.ndarray, int]:
+    if isinstance(result, dict):
+        audio_value: object | None = None
+        for key in (
+            "audio",
+            "audios",
+            "waveform",
+            "waveforms",
+            "samples",
+            "audio_data",
+            "tts_audio",
+        ):
+            if key not in result:
+                continue
+            audio_value = result[key]
+            if key in {"audios", "waveforms"} and isinstance(audio_value, (list, tuple)):
+                audio_value = audio_value[0] if audio_value else None
+            break
+
+        if audio_value is None:
+            raise ValueError("Infer result dictionary did not contain audio samples")
+
+        sr_value: object | None = None
+        for key in ("sample_rate", "sampling_rate", "sr", "audio_sr", "sampleRate"):
+            if key in result:
+                sr_value = result[key]
+                break
+
+        audio = np.array(audio_value, dtype=np.float32).reshape(-1)
+        native_sr = int(sr_value) if sr_value else getattr(pipe, "target_sample_rate", out_sr)
+        return audio, native_sr
+
     if not isinstance(result, tuple):
         audio = np.array(result, dtype=np.float32).reshape(-1)
         native_sr = getattr(pipe, "target_sample_rate", out_sr)
