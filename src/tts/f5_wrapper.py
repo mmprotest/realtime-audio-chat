@@ -35,11 +35,8 @@ class F5Cloner:
 
     def _load_pipe(self):  # pragma: no cover - small wrapper
         if self._pipe is None:
-            try:
-                from f5_tts import F5TTS
-            except ImportError as exc:  # pragma: no cover
-                raise RuntimeError("f5-tts is not installed. Please install dependencies.") from exc
-            self._pipe = F5TTS(device=self.device)
+            F5TTS_cls = _resolve_f5_api()
+            self._pipe = F5TTS_cls(device=self.device)
             LOGGER.info("Loaded F5-TTS pipeline")
         return self._pipe
 
@@ -123,3 +120,39 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
 
 
 __all__ = ["VoiceProfile", "F5Cloner"]
+
+
+def _resolve_f5_api():  # pragma: no cover - exercised only with dependency installed
+    """Locate the F5-TTS entry point across published package layouts."""
+
+    try:
+        import f5_tts  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError("f5-tts is not installed. Please install dependencies.") from exc
+
+    candidate_attrs = ("F5TTS", "F5TTSInference", "F5TTSPipeline")
+    for attr in candidate_attrs:
+        cls = getattr(f5_tts, attr, None)
+        if cls is not None:
+            return cls
+
+    from importlib import import_module
+
+    candidate_modules = (
+        "f5_tts.api",
+        "f5_tts.inference",
+    )
+    for module_name in candidate_modules:
+        try:
+            module = import_module(module_name)
+        except ImportError:
+            continue
+        for attr in candidate_attrs:
+            cls = getattr(module, attr, None)
+            if cls is not None:
+                return cls
+
+    raise RuntimeError(
+        "Installed f5-tts package does not expose an F5TTS-compatible class. "
+        "Please upgrade/downgrade f5-tts or install extras that include the inference API."
+    )

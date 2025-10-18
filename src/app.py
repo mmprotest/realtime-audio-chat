@@ -45,6 +45,20 @@ if _version_tuple(gradio.__version__) < MIN_GRADIO_VERSION:  # pragma: no cover 
     )
 
 
+<<<<<<< HEAD
+try:
+    from fastrtc import ReplyOnPause, Stream
+except ModuleNotFoundError as exc:  # pragma: no cover - import-time guard
+    if exc.name == "numpy.typing":
+        raise ModuleNotFoundError(
+            "FastRTC requires numpy>=1.20 to expose numpy.typing."
+            " Install or upgrade numpy with 'pip install "
+            "\"numpy>=1.20\"'' before running the app."
+        ) from exc
+    raise
+
+=======
+>>>>>>> main
 from .config import get_settings
 from .llm_client import LLMClient
 from .persona import PERSONA_QUESTIONS, PersonaState, build_persona_system_prompt
