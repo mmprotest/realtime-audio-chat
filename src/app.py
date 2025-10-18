@@ -260,6 +260,7 @@ def main(argv: list[str] | None = None) -> None:
     settings = get_settings(argv)
     stt = get_stt()
     tts = F5Cloner(device=settings.device)
+    tts.ensure_pipeline()
     llm = LLMClient(settings.openai_api_key, settings.openai_base_url)
     atexit.register(llm.close)
 
