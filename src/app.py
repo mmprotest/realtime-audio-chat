@@ -5,7 +5,7 @@ import atexit
 import logging
 from dataclasses import dataclass
 from io import BytesIO
-from typing import List, Tuple
+from typing import Dict, List, Tuple
 
 import gradio
 import gradio as gr
@@ -115,6 +115,18 @@ def _build_voice_profile(
         speaker_sr=speaker_sr if speaker_sr is not None else source.speaker_sr,
         style_notes=style_notes if style_notes is not None else source.style_notes,
     )
+
+
+def _history_to_messages(history: List[Tuple[str, str]]) -> List[Dict[str, str]]:
+    """Convert stored turn pairs into Gradio message dictionaries."""
+
+    messages: List[Dict[str, str]] = []
+    for user_text, assistant_text in history:
+        if user_text:
+            messages.append({"role": "user", "content": user_text})
+        if assistant_text:
+            messages.append({"role": "assistant", "content": assistant_text})
+    return messages
 
 
 @dataclass
@@ -260,6 +272,7 @@ def main(argv: list[str] | None = None) -> None:
     settings = get_settings(argv)
     stt = get_stt()
     tts = F5Cloner(device=settings.device)
+    tts.ensure_pipeline()
     llm = LLMClient(settings.openai_api_key, settings.openai_base_url)
     atexit.register(llm.close)
 
@@ -383,15 +396,15 @@ def main(argv: list[str] | None = None) -> None:
             voice: VoiceProfile,
             persona: PersonaState,
             history: List[Tuple[str, str]],
-        ) -> Tuple[List[Tuple[str, str]], str, str, Tuple[int, np.ndarray] | None, List[Tuple[str, str]]]:
+        ) -> Tuple[List[Dict[str, str]], str, str, Tuple[int, np.ndarray] | None, List[Tuple[str, str]]]:
             if not audio:
-                return history, "", "", None, history
+                return _history_to_messages(history), "", "", None, history
             sr, data = audio
             if sr <= 0:
-                return history, "", "", None, history
+                return _history_to_messages(history), "", "", None, history
             array = np.asarray(data)
             if array.size == 0:
-                return history, "", "", None, history
+                return _history_to_messages(history), "", "", None, history
             if array.ndim > 1:
                 array = np.mean(array, axis=1)
             array = array.astype(np.float32, copy=False)
@@ -399,12 +412,12 @@ def main(argv: list[str] | None = None) -> None:
                 transcription = stt.transcribe((sr, array))
             except Exception:  # pragma: no cover - runtime safety
                 LOGGER.exception("STT failure")
-                return history, "", "Speech recognition failed.", None, history
+                return _history_to_messages(history), "", "Speech recognition failed.", None, history
 
             transcription = (transcription or "").strip()
             if not transcription:
                 LOGGER.debug("No speech detected")
-                return history, "", "", None, history
+                return _history_to_messages(history), "", "", None, history
 
             LOGGER.info("User said: %s", transcription)
             messages = []
@@ -416,17 +429,17 @@ def main(argv: list[str] | None = None) -> None:
                 reply = llm.chat(messages, settings.openai_model)
             except Exception:
                 LOGGER.exception("LLM request failed")
-                return history, transcription, "LLM request failed.", None, history
+                return _history_to_messages(history), transcription, "LLM request failed.", None, history
 
             reply_text = (reply or "").strip()
             if not reply_text:
                 LOGGER.warning("LLM returned empty reply")
-                return history, transcription, "", None, history
+                return _history_to_messages(history), transcription, "", None, history
             LOGGER.info("Assistant reply: %s", reply_text)
 
             new_history = history + [(transcription, reply_text)]
             audio_result = synthesize_audio(reply_text, voice)
-            return new_history, transcription, reply_text, audio_result, new_history
+            return _history_to_messages(new_history), transcription, reply_text, audio_result, new_history
 
         def on_audio_stream(
             audio: Tuple[int, np.ndarray] | None,
@@ -456,14 +469,14 @@ def main(argv: list[str] | None = None) -> None:
                     history,
                     detector,
                 )
-            history_out, transcript, reply_text, audio_stream, updated_history = process_turn(
+            messages_out, transcript, reply_text, audio_stream, updated_history = process_turn(
                 payload,
                 voice,
                 persona,
                 history,
             )
             return (
-                history_out,
+                messages_out,
                 transcript,
                 reply_text,
                 audio_stream,
@@ -489,14 +502,14 @@ def main(argv: list[str] | None = None) -> None:
                     history,
                     detector,
                 )
-            history_out, transcript, reply_text, audio_stream, updated_history = process_turn(
+            messages_out, transcript, reply_text, audio_stream, updated_history = process_turn(
                 payload,
                 voice,
                 persona,
                 history,
             )
             return (
-                history_out,
+                messages_out,
                 transcript,
                 reply_text,
                 audio_stream,
@@ -506,7 +519,7 @@ def main(argv: list[str] | None = None) -> None:
 
         def clear_conversation(
             detector: PauseDetector | None,
-        ) -> Tuple[List[Tuple[str, str]], str, str, None, List[Tuple[str, str]], PauseDetector]:
+        ) -> Tuple[List[Dict[str, str]], str, str, None, List[Tuple[str, str]], PauseDetector]:
             if detector is None:
                 detector = PauseDetector()
             detector.reset()
