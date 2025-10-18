@@ -85,6 +85,7 @@ For sensitive deployments, optionally require the uploaded voice sample to conta
 - **Audio device errors**: close other audio apps or check system permissions.
 - **Windows script blocked**: use the `Set-ExecutionPolicy` command above, then rerun the setup script.
 - **Gradio errors about streaming audio**: ensure `gradio==4.44.1` (or newer) is installed (`pip install --upgrade gradio==4.44.1`).
+- **`ModuleNotFoundError: numpy.typing`**: remove any leftover local `numpy` folders (the project no longer ships a shim) and reinstall dependencies so Python picks up the packaged NumPy distribution (`pip install -r requirements.txt`).
 
 ## Project structure
 ```
