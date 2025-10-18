@@ -329,16 +329,14 @@ def _load_packaged_reference() -> tuple[np.ndarray, int, str] | None:
     except Exception:
         return None
 
-    for candidate in root.rglob("*.wav"):
+    for candidate in _iter_traversable_wavs(root):
         try:
             with resources.as_file(candidate) as wav_path:
                 wav, sr = _read_wav_file(wav_path)
-            transcript = ""
-            text_name = Path(candidate.name).with_suffix(".txt").name
-            text_candidate = candidate.parent.joinpath(text_name)
-            with contextlib.suppress(Exception):
-                with resources.as_file(text_candidate) as text_path:
-                    transcript = Path(text_path).read_text(encoding="utf-8").strip()
+                transcript = ""
+                text_path = wav_path.with_suffix(".txt")
+                if text_path.exists():
+                    transcript = text_path.read_text(encoding="utf-8").strip()
         except Exception:
             continue
         if wav.size == 0:
@@ -417,3 +415,29 @@ def _resolve_f5_api():  # pragma: no cover - exercised only with dependency inst
         "Installed f5-tts package does not expose an F5TTS-compatible class. "
         "Please upgrade/downgrade f5-tts or install extras that include the inference API."
     )
+
+
+def _iter_traversable_wavs(root):
+    """Iterate over ``*.wav`` files beneath an importlib.resources Traversable tree."""
+
+    stack = [root]
+    while stack:
+        current = stack.pop()
+        try:
+            children = list(current.iterdir())
+        except Exception:
+            continue
+
+        for child in children:
+            try:
+                if child.is_dir():
+                    stack.append(child)
+                    continue
+            except Exception:
+                # Some traversable implementations may not expose ``is_dir``;
+                # treat them conservatively as files.
+                pass
+
+            name = getattr(child, "name", "")
+            if isinstance(name, str) and name.lower().endswith(".wav"):
+                yield child
