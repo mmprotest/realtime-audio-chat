@@ -5,7 +5,7 @@ import atexit
 import logging
 from dataclasses import dataclass
 from io import BytesIO
-from typing import Generator, Iterable, List, Tuple
+from typing import List, Tuple
 
 import gradio
 import gradio as gr
@@ -245,43 +245,6 @@ class PauseDetector:
         self.reset()
         return None
 
-def _summarize_audio(data: np.ndarray, sr: int) -> str:
-    samples = data.shape[0]
-    channels = 1 if data.ndim == 1 else data.shape[1]
-    duration = samples / float(sr)
-    return f"Loaded sample: {duration:.2f}s @ {sr}Hz ({channels} channel{'s' if channels != 1 else ''})"
-
-
-def _decode_wav_chunk(payload: bytes) -> np.ndarray:
-    if not payload:
-        return np.array([], dtype=np.float32)
-    if sf is not None:
-        audio, _ = sf.read(BytesIO(payload), dtype="float32")
-    else:  # pragma: no cover - fallback path when soundfile missing
-        import wave
-
-        with wave.open(BytesIO(payload), "rb") as wav_file:
-            frames = wav_file.readframes(wav_file.getnframes())
-            audio = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32767.0
-    if audio.ndim > 1:
-        audio = np.mean(audio, axis=1)
-    return audio.astype(np.float32, copy=False)
-
-
-def _build_voice_profile(
-    source: VoiceProfile,
-    *,
-    speaker_wav: np.ndarray | None = None,
-    speaker_sr: int | None = None,
-    style_notes: str | None = None,
-) -> VoiceProfile:
-    return VoiceProfile(
-        speaker_wav=speaker_wav if speaker_wav is not None else source.speaker_wav,
-        speaker_sr=speaker_sr if speaker_sr is not None else source.speaker_sr,
-        style_notes=style_notes if style_notes is not None else source.style_notes,
-    )
-
-
 def main(argv: list[str] | None = None) -> None:
     settings = get_settings(argv)
     stt = get_stt()
@@ -306,7 +269,7 @@ def main(argv: list[str] | None = None) -> None:
 
         with gr.Row():
             with gr.Column(scale=2):
-                conversation = gr.Chatbot(label="Conversation", height=320)
+                conversation = gr.Chatbot(label="Conversation", height=320, type="messages")
                 audio_input = gr.Audio(
                     sources=["microphone"],
                     type="numpy",
@@ -385,11 +348,11 @@ def main(argv: list[str] | None = None) -> None:
                     outputs=[persona_state, voice_state, persona_status],
                 )
 
-        def synthesize_stream(
+        def synthesize_audio(
             text: str,
             profile: VoiceProfile,
-        ) -> Generator[Tuple[int, np.ndarray], None, None]:
-            accumulated = np.array([], dtype=np.float32)
+        ) -> Tuple[int, np.ndarray] | None:
+            chunks: List[np.ndarray] = []
             for chunk in tts.stream_tts_sync(text, profile, settings.f5_output_sr, settings.chunk_ms):
                 try:
                     decoded = _decode_wav_chunk(chunk)
@@ -398,18 +361,18 @@ def main(argv: list[str] | None = None) -> None:
                     continue
                 if decoded.size == 0:
                     continue
-                if accumulated.size == 0:
-                    accumulated = decoded
-                else:
-                    accumulated = np.concatenate((accumulated, decoded))
-                yield settings.f5_output_sr, accumulated
+                chunks.append(decoded)
+            if not chunks:
+                return None
+            combined = np.concatenate(chunks).astype(np.float32, copy=False)
+            return settings.f5_output_sr, combined
 
         def process_turn(
             audio: Tuple[int, np.ndarray] | None,
             voice: VoiceProfile,
             persona: PersonaState,
             history: List[Tuple[str, str]],
-        ) -> Tuple[List[Tuple[str, str]], str, str, Iterable[Tuple[int, np.ndarray]] | None, List[Tuple[str, str]]]:
+        ) -> Tuple[List[Tuple[str, str]], str, str, Tuple[int, np.ndarray] | None, List[Tuple[str, str]]]:
             if not audio:
                 return history, "", "", None, history
             sr, data = audio
@@ -451,8 +414,8 @@ def main(argv: list[str] | None = None) -> None:
             LOGGER.info("Assistant reply: %s", reply_text)
 
             new_history = history + [(transcription, reply_text)]
-            audio_stream = synthesize_stream(reply_text, voice)
-            return new_history, transcription, reply_text, audio_stream, new_history
+            audio_result = synthesize_audio(reply_text, voice)
+            return new_history, transcription, reply_text, audio_result, new_history
 
         def on_audio_stream(
             audio: Tuple[int, np.ndarray] | None,
