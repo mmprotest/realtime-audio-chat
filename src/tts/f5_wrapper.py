@@ -20,6 +20,20 @@ except Exception:  # pragma: no cover - exercised when soundfile missing
 
 LOGGER = logging.getLogger(__name__)
 
+_REFERENCE_PARAM_NAMES = {
+    "ref_file",
+    "ref_path",
+    "ref_audio_path",
+    "ref_wav_path",
+    "reference_path",
+    "ref_audio_file",
+    "prompt_wav",
+    "prompt_audio",
+    "ref_audio",
+    "reference_audio",
+    "ref_waveform",
+}
+
 
 @dataclass(slots=True)
 class VoiceProfile:
@@ -202,6 +216,7 @@ def _infer_v1(pipe: object, text: str, profile: VoiceProfile, out_sr: int) -> np
     """Compatibility bridge for packages exposing an ``infer`` entry point."""
 
     ref_text = getattr(profile, "reference_text", "") or ""
+    requires_reference = _infer_requires_reference(getattr(pipe, "infer"))
     candidates: list[tuple[str | None, str]] = []
 
     if profile.speaker_wav is not None and profile.speaker_sr is not None:
@@ -214,14 +229,30 @@ def _infer_v1(pipe: object, text: str, profile: VoiceProfile, out_sr: int) -> np
         else:
             candidates.append((path, ref_text))
 
-    candidates.append((None, ref_text))
+    if not requires_reference:
+        candidates.append((None, ref_text))
+
+    if not candidates:
+        if requires_reference:
+            LOGGER.error(
+                "F5 inference requires reference audio, but no usable clip was provided"
+            )
+        return np.array([], dtype=np.float32)
 
     errors: list[Exception] = []
     for ref_path, ref_prompt in candidates:
         try:
             result = _call_infer(pipe, text, ref_path, ref_prompt, profile)
         except Exception as exc:  # pragma: no cover - runtime guard
+            attempt_no = len(errors) + 1
             errors.append(exc)
+            LOGGER.error(
+                "F5 inference attempt %s failed with %s: %s",
+                attempt_no,
+                exc.__class__.__name__,
+                exc,
+                exc_info=exc,
+            )
             result = None
         finally:
             if ref_path:
@@ -241,12 +272,28 @@ def _infer_v1(pipe: object, text: str, profile: VoiceProfile, out_sr: int) -> np
         return audio.astype(np.float32, copy=False)
 
     if errors:
-        for idx, exc in enumerate(errors, 1):
-            LOGGER.debug("F5 inference attempt %s failed", idx, exc_info=exc)
         LOGGER.warning(
             "F5 inference failed after %s attempt(s); returning silence", len(errors)
         )
     return np.array([], dtype=np.float32)
+
+
+def _infer_requires_reference(infer: object) -> bool:
+    try:
+        signature = inspect.signature(infer)
+    except (TypeError, ValueError):
+        return False
+
+    for name, param in signature.parameters.items():
+        if name == "self":
+            continue
+        if param.kind in (
+            inspect.Parameter.POSITIONAL_ONLY,
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ) and param.default is inspect._empty and name in _REFERENCE_PARAM_NAMES:
+            return True
+    return False
 
 
 def _call_infer(
@@ -263,6 +310,17 @@ def _call_infer(
         signature = None
 
     params = signature.parameters if signature else {}
+    required_params: set[str] = set()
+    if signature:
+        for name, param in params.items():
+            if name == "self":
+                continue
+            if param.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ) and param.default is inspect._empty:
+                required_params.add(name)
     accepts_kwargs = (
         any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
         if signature
@@ -371,7 +429,22 @@ def _call_infer(
         merged = dict(base_kwargs)
         for fragment in pieces:
             merged.update({k: v for k, v in fragment.items() if v is not None})
+        if required_params and not (set(merged) >= required_params or accepts_kwargs):
+            missing_required = required_params - set(merged)
+            if missing_required and not accepts_kwargs:
+                continue
         combos.append(merged)
+
+    if (
+        not combos
+        and required_params
+        and not accepts_kwargs
+        and ref_path is None
+        and required_params & _REFERENCE_PARAM_NAMES
+    ):
+        raise TypeError(
+            "infer requires reference audio arguments that could not be populated"
+        )
 
     unique: list[dict[str, object]] = []
     seen: set[tuple[tuple[str, object], ...]] = set()
@@ -412,6 +485,37 @@ def _call_infer(
 
 
 def _normalize_infer_result(pipe: object, result: object, out_sr: int) -> tuple[np.ndarray, int]:
+    if isinstance(result, dict):
+        audio_value: object | None = None
+        for key in (
+            "audio",
+            "audios",
+            "waveform",
+            "waveforms",
+            "samples",
+            "audio_data",
+            "tts_audio",
+        ):
+            if key not in result:
+                continue
+            audio_value = result[key]
+            if key in {"audios", "waveforms"} and isinstance(audio_value, (list, tuple)):
+                audio_value = audio_value[0] if audio_value else None
+            break
+
+        if audio_value is None:
+            raise ValueError("Infer result dictionary did not contain audio samples")
+
+        sr_value: object | None = None
+        for key in ("sample_rate", "sampling_rate", "sr", "audio_sr", "sampleRate"):
+            if key in result:
+                sr_value = result[key]
+                break
+
+        audio = np.array(audio_value, dtype=np.float32).reshape(-1)
+        native_sr = int(sr_value) if sr_value else getattr(pipe, "target_sample_rate", out_sr)
+        return audio, native_sr
+
     if not isinstance(result, tuple):
         audio = np.array(result, dtype=np.float32).reshape(-1)
         native_sr = getattr(pipe, "target_sample_rate", out_sr)
