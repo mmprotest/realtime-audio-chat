@@ -4,7 +4,7 @@ soundfile==0.12.1
 numpy==1.26.4
 torch==2.2.2
 torchaudio==2.2.2
-gradio==4.31.3
+gradio==4.44.1
 pydantic==2.6.4
 pydantic-settings==2.2.1
 python-dotenv==1.0.1

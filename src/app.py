@@ -5,6 +5,7 @@ import logging
 import threading
 from typing import Dict, Generator
 
+import gradio
 import soundfile as sf
 
 try:  # pragma: no cover - runtime shim for older gradio_client releases
@@ -19,6 +20,26 @@ else:
             return file_like
 
         gradio_client.handle_file = _passthrough_handle_file  # type: ignore[attr-defined]
+
+MIN_GRADIO_VERSION = (4, 44, 0)
+
+
+def _version_tuple(version_str: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for segment in version_str.replace("-", ".").split("."):
+        digits = "".join(ch for ch in segment if ch.isdigit())
+        if not digits:
+            break
+        parts.append(int(digits))
+    return tuple(parts)
+
+
+if _version_tuple(gradio.__version__) < MIN_GRADIO_VERSION:  # pragma: no cover - runtime guard
+    required = ".".join(str(x) for x in MIN_GRADIO_VERSION)
+    raise RuntimeError(
+        f"Gradio version {gradio.__version__} is incompatible with FastRTC; install gradio>={required}"
+    )
+
 
 from fastrtc import ReplyOnPause, Stream
 

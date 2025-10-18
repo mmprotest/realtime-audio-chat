@@ -80,6 +80,7 @@ For sensitive deployments, optionally require the uploaded voice sample to conta
 - **CUDA not detected**: the app falls back to CPU automatically; ensure compatible Torch build is installed.
 - **Audio device errors**: close other audio apps or check system permissions.
 - **Windows script blocked**: use the `Set-ExecutionPolicy` command above, then rerun the setup script.
+- **FastRTC UI fails with `Component.__init__()` errors**: ensure `gradio==4.44.1` is installed (`pip install --upgrade gradio==4.44.1`). Older Gradio builds are incompatible with the bundled FastRTC components.
 
 ## Project structure
 ```
