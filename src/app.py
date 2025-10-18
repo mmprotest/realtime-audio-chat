@@ -7,6 +7,19 @@ from typing import Dict, Generator
 
 import soundfile as sf
 
+try:  # pragma: no cover - runtime shim for older gradio_client releases
+    import gradio_client  # type: ignore
+except Exception:  # pragma: no cover - module missing entirely
+    gradio_client = None  # type: ignore
+else:
+    if not hasattr(gradio_client, "handle_file"):
+        def _passthrough_handle_file(file_like: object, *args: object, **kwargs: object) -> object:
+            """Fallback for gradio_client.handle_file when running older clients."""
+
+            return file_like
+
+        gradio_client.handle_file = _passthrough_handle_file  # type: ignore[attr-defined]
+
 from fastrtc import ReplyOnPause, Stream
 
 from .config import get_settings
