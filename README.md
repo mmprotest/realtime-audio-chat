@@ -65,8 +65,8 @@ python -m src.app --cpu
 1. Start the app and visit the printed Gradio URL (defaults to <http://localhost:7860>). Allow microphone access.
 2. Upload or record a 2–10 s clean reference voice clip in the **Voice cloning** panel.
 3. Add optional persona cues (tone, pacing, fillers, cultural cues, etc.) and click **Save persona**.
-4. Hold the microphone record button, speak, then release and press **Send**.
-5. Moonshine STT transcribes the audio, the OpenAI model replies, and F5-TTS streams cloned speech back in near realtime.
+4. Hold the microphone record button, speak, then release — the pause detector automatically hands off the captured audio once you stop talking.
+5. Moonshine STT transcribes the audio, the OpenAI model replies, and F5-TTS streams cloned speech back in near realtime without any extra clicks.
 
 ### Latency tips
 - Prefer GPUs (`DEVICE=cuda`).
