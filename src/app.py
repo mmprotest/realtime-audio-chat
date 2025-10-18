@@ -245,6 +245,43 @@ class PauseDetector:
         self.reset()
         return None
 
+def _summarize_audio(data: np.ndarray, sr: int) -> str:
+    samples = data.shape[0]
+    channels = 1 if data.ndim == 1 else data.shape[1]
+    duration = samples / float(sr)
+    return f"Loaded sample: {duration:.2f}s @ {sr}Hz ({channels} channel{'s' if channels != 1 else ''})"
+
+
+def _decode_wav_chunk(payload: bytes) -> np.ndarray:
+    if not payload:
+        return np.array([], dtype=np.float32)
+    if sf is not None:
+        audio, _ = sf.read(BytesIO(payload), dtype="float32")
+    else:  # pragma: no cover - fallback path when soundfile missing
+        import wave
+
+        with wave.open(BytesIO(payload), "rb") as wav_file:
+            frames = wav_file.readframes(wav_file.getnframes())
+            audio = np.frombuffer(frames, dtype="<i2").astype(np.float32) / 32767.0
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+    return audio.astype(np.float32, copy=False)
+
+
+def _build_voice_profile(
+    source: VoiceProfile,
+    *,
+    speaker_wav: np.ndarray | None = None,
+    speaker_sr: int | None = None,
+    style_notes: str | None = None,
+) -> VoiceProfile:
+    return VoiceProfile(
+        speaker_wav=speaker_wav if speaker_wav is not None else source.speaker_wav,
+        speaker_sr=speaker_sr if speaker_sr is not None else source.speaker_sr,
+        style_notes=style_notes if style_notes is not None else source.style_notes,
+    )
+
+
 def main(argv: list[str] | None = None) -> None:
     settings = get_settings(argv)
     stt = get_stt()
