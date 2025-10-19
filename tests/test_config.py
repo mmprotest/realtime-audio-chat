@@ -13,6 +13,12 @@ def clear_settings_cache():
     yield
     get_settings.cache_clear()
 
+    settings = get_settings()
+    assert settings.groq_model == "llama-3.1-8b-instant"
+    assert settings.f5_tts_url == "http://localhost:9880"
+    assert settings.whisper_url == "http://localhost:9000"
+    assert settings.tts_sample_rate == 24000
+    assert settings.input_sample_rate == 16000
 
 def test_settings_defaults(monkeypatch):
     monkeypatch.delenv("OPENAI_MODEL", raising=False)
