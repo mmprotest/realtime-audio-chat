@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable
 
@@ -10,7 +11,6 @@ import numpy as np
 import yaml
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from importlib import resources
 
 VoiceMap = Dict[str, "VoiceConfig"]
 ModelLoader = Callable[[], "F5Model"]
@@ -134,11 +134,11 @@ def _load_default_voices() -> VoiceMap:
             data = yaml.safe_load(handle)
             return _parse_voice_map(data, base_dir=os.path.dirname(path))
 
-    resource_root = resources.files("resources.voices")
-    with resources.as_file(resource_root.joinpath("voices.yaml")) as config_path:
-        data = yaml.safe_load(config_path.read_text("utf-8"))
-        base_dir = str(config_path.parent)
-    return _parse_voice_map(data, base_dir=base_dir)
+    voices_root = Path(__file__).resolve().parent.parent / "resources" / "voices"
+    config_path = voices_root / "voices.yaml"
+    with config_path.open("r", encoding="utf-8") as handle:
+        data = yaml.safe_load(handle)
+    return _parse_voice_map(data, base_dir=str(voices_root))
 
 
 def _parse_voice_map(data: dict[str, object], base_dir: str) -> VoiceMap:
@@ -240,20 +240,12 @@ def _ensure_ffmpeg() -> None:
     bundled `imageio-ffmpeg` wheel.
     """
 
-    try:
-        from pydub import AudioSegment  # type: ignore[import-not-found]
-    except ModuleNotFoundError as exc:  # pragma: no cover - depends on optional dep
-        raise RuntimeError(
-            "pydub is required to run the F5-TTS server. Install the tts_server "
-            "extra or add pydub to your environment."
-        ) from exc
-
-    candidates = []
     env_path = os.getenv("FFMPEG_BINARY")
-    if env_path:
-        candidates.append(env_path)
-    candidates.append(shutil.which("ffmpeg"))
-    candidates.append(shutil.which("ffmpeg.exe"))
+    candidates = [env_path] if env_path else []
+    for name in ("ffmpeg", "ffmpeg.exe"):
+        candidate = shutil.which(name)
+        if candidate:
+            candidates.append(candidate)
 
     ffmpeg_path: str | None = next((p for p in candidates if p), None)
     if not ffmpeg_path:
@@ -265,6 +257,16 @@ def _ensure_ffmpeg() -> None:
                 "FFMPEG_BINARY to its path, or install the imageio-ffmpeg package."
             ) from exc
         ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+
+    os.environ.setdefault("FFMPEG_BINARY", ffmpeg_path)
+
+    try:
+        from pydub import AudioSegment  # type: ignore[import-not-found]
+    except ModuleNotFoundError as exc:  # pragma: no cover - depends on optional dep
+        raise RuntimeError(
+            "pydub is required to run the F5-TTS server. Install the tts_server "
+            "extra or add pydub to your environment."
+        ) from exc
 
     AudioSegment.converter = ffmpeg_path
     AudioSegment.ffmpeg = ffmpeg_path
