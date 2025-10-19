@@ -12,7 +12,7 @@ authors = [
 ]
 requires-python = ">=3.10"
 dependencies = [
-    "fastrtc==0.1.11",
+    "fastrtc==0.0.33",
     "gradio==4.44.1",
     "numpy==1.26.4",
     "faster-whisper==1.0.3",
