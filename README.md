@@ -12,14 +12,16 @@ This project wires together an OpenAI-compatible LLM, a local Whisper transcript
 
 ### Requirements
 - Python 3.10+
-- Running REST endpoints for Whisper (`/transcribe`) and F5-TTS (`/tts`).
 - An OpenAI API key (`OPENAI_API_KEY`) or credentials for your compatible server.
+- For local audio services you can either supply your own deployments or run the bundled Whisper and F5-TTS FastAPI apps.
 
 ### Installation
 ```bash
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+# Optional: install inference dependencies for the bundled servers
+pip install '.[stt_server]' '.[tts_server]'
 ```
 
 ### Configuration
@@ -47,12 +49,27 @@ python -m src.app
 
 Set `MODE=UI` to force a standard Gradio launch, or `MODE=PHONE` to start the FastRTC FastPhone demo mode.
 
+### Run the bundled audio services
+
+Two FastAPI apps live under `src/servers/` so you can host Whisper and F5-TTS locally without additional glue code.
+
+```bash
+# Whisper speech-to-text on http://localhost:9000
+python -m src.servers.whisper
+
+# F5-TTS streaming synthesis on http://localhost:9880
+python -m src.servers.f5
+```
+
+By default the F5-TTS server loads the included `resources/voices/voices.yaml`, which maps the `ljspeech` voice to a
+public-domain LJSpeech sample. You can point the server at your own voices file via `F5_TTS_VOICES_FILE=/path/to/voices.yaml`.
+
 ## Local service expectations
 
 ### Whisper `/transcribe`
 - Method: `POST`
 - JSON body: `{ "audio": "<base64 wav>", "sample_rate": 16000, "language": "en" }`
-- Response JSON: `{ "text": "..." }`
+- Response JSON: `{ "text": "...", "duration": 1.23 }`
 
 ### F5-TTS `/tts`
 - Method: `POST`
@@ -68,11 +85,24 @@ realtime-audio-chat/
 ├─ src/
 │  ├─ app.py
 │  ├─ config.py
-│  └─ local_clients.py
+│  ├─ local_clients.py
+│  ├─ resources/
+│  │  └─ voices/
+│  │     ├─ README.md
+│  │     ├─ ljspeech-LJ001-0001.txt
+│  │     ├─ ljspeech-LJ001-0001.wav
+│  │     └─ voices.yaml
+│  └─ servers/
+│     ├─ __init__.py
+│     ├─ f5.py
+│     └─ whisper.py
 └─ tests/
    ├─ conftest.py
+   ├─ test_app_history.py
    ├─ test_config.py
-   └─ test_local_clients.py
+   ├─ test_f5_server.py
+   ├─ test_local_clients.py
+   └─ test_whisper_server.py
 ```
 
 ## Testing

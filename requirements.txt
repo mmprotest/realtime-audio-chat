@@ -3,4 +3,8 @@ gradio==4.44.1
 numpy==1.26.4
 openai==1.35.10
 python-dotenv==1.0.1
+fastapi==0.115.6
+pydantic==2.10.6
+uvicorn==0.31.1
+PyYAML==6.0.2
 pytest==8.2.1

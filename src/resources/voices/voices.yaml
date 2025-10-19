@@ -1,0 +1,5 @@
+voices:
+  ljspeech:
+    ref_audio: ljspeech-LJ001-0001.wav
+    ref_text: ljspeech-LJ001-0001.txt
+    description: "LJSpeech demo voice from the public domain LJSpeech dataset."
