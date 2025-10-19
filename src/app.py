@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Generator, Iterable, Optional
+from typing import Generator, Iterable, Optional, Sequence
 
 import gradio as gr
 import numpy as np
@@ -40,7 +40,9 @@ stt_model = WhisperSTTClient(
 
 
 AudioTuple = tuple[int, NDArray[np.int16 | np.float32]]
-ChatHistory = list[dict[str, str]]
+ChatMessageDict = dict[str, str]
+ChatEntry = ChatMessageDict | Sequence[str] | str
+ChatHistory = list[ChatEntry]
 
 
 def _pcm_chunks_to_arrays(
@@ -72,6 +74,29 @@ def _pcm_chunks_to_arrays(
 
 # See "Talk to Claude" in Cookbook for an example of how to keep
 # track of the chat history.
+def _chatbot_to_messages(chatbot: ChatHistory) -> list[ChatMessageDict]:
+    """Convert Gradio Chatbot history into OpenAI-style chat messages."""
+
+    messages: list[ChatMessageDict] = []
+    for entry in chatbot:
+        if isinstance(entry, dict):
+            role = entry.get("role")
+            content = entry.get("content")
+            if role and content is not None:
+                messages.append({"role": role, "content": str(content)})
+        elif isinstance(entry, str):
+            # Some versions of the Chatbot component may pass bare strings.
+            messages.append({"role": "user", "content": entry})
+        elif isinstance(entry, Sequence):
+            # Tuple/list pairs (user, assistant) are the historical default.
+            if len(entry) >= 1 and entry[0]:
+                messages.append({"role": "user", "content": str(entry[0])})
+            if len(entry) >= 2 and entry[1]:
+                messages.append({"role": "assistant", "content": str(entry[1])})
+        # Ignore any other unrecognized formats silently.
+    return messages
+
+
 def response(
     audio: AudioTuple,
     chatbot: Optional[ChatHistory] = None,
@@ -79,7 +104,7 @@ def response(
 ):
     _ = event  # ReplyOnPause provides an interaction event we don't currently use.
     chatbot = chatbot or []
-    messages = [{"role": d["role"], "content": d["content"]} for d in chatbot]
+    messages = _chatbot_to_messages(chatbot)
     start = time.time()
     text = stt_model.stt(audio)
     print("transcription", time.time() - start)
