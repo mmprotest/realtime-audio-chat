@@ -72,7 +72,12 @@ def _pcm_chunks_to_arrays(
 
 # See "Talk to Claude" in Cookbook for an example of how to keep
 # track of the chat history.
-def response(audio: AudioTuple, chatbot: Optional[ChatHistory] = None):
+def response(
+    audio: AudioTuple,
+    chatbot: Optional[ChatHistory] = None,
+    event: object | None = None,
+):
+    _ = event  # ReplyOnPause provides an interaction event we don't currently use.
     chatbot = chatbot or []
     messages = [{"role": d["role"], "content": d["content"]} for d in chatbot]
     start = time.time()
