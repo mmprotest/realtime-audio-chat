@@ -3,26 +3,20 @@ requires = ["setuptools>=61", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "realtime-voice-chat"
-version = "0.1.0"
-description = "Realtime AI audio chat with Moonshine STT, OpenAI LLM, and F5-TTS streaming"
+name = "realtime-audio-chat"
+version = "0.2.0"
+description = "Realtime voice chat with local Whisper STT and F5-TTS streaming"
 readme = "README.md"
 authors = [
-    { name = "Realtime Voice Team" }
+    { name = "Realtime Audio Team" }
 ]
 requires-python = ">=3.10"
 dependencies = [
     "fastrtc==0.1.11",
-    "f5-tts==0.1.0",
-    "soundfile==0.12.1",
-    "numpy==1.26.4",
-    "torch==2.2.2",
-    "torchaudio==2.2.2",
     "gradio==4.44.1",
-    "pydantic==2.6.4",
-    "pydantic-settings==2.2.1",
+    "numpy==1.26.4",
+    "openai==1.35.10",
     "python-dotenv==1.0.1",
-    "openai==1.30.1",
 ]
 
 [project.optional-dependencies]
