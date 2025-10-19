@@ -10,8 +10,10 @@ from functools import lru_cache
 class Settings:
     """Configuration values loaded from environment variables."""
 
-    groq_model: str
-    groq_max_tokens: int
+    openai_model: str
+    openai_max_tokens: int
+    openai_base_url: str | None
+    openai_api_key: str | None
     f5_tts_url: str
     f5_tts_voice: str
     f5_tts_output_format: str
@@ -27,18 +29,25 @@ def _get_env(name: str, default: str) -> str:
     return value if value else default
 
 
+def _get_optional_env(name: str) -> str | None:
+    value = os.getenv(name)
+    return value if value else None
+
+
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     """Load :class:`Settings` from the current process environment."""
 
-    groq_max_tokens = int(_get_env("GROQ_MAX_TOKENS", "512"))
+    openai_max_tokens = int(_get_env("OPENAI_MAX_TOKENS", "512"))
     http_timeout = float(_get_env("HTTP_TIMEOUT", "30"))
     tts_sample_rate = int(_get_env("OUTPUT_SAMPLE_RATE", "24000"))
     input_sample_rate = int(_get_env("INPUT_SAMPLE_RATE", "16000"))
 
     return Settings(
-        groq_model=_get_env("GROQ_MODEL", "llama-3.1-8b-instant"),
-        groq_max_tokens=groq_max_tokens,
+        openai_model=_get_env("OPENAI_MODEL", "gpt-4o-mini"),
+        openai_max_tokens=openai_max_tokens,
+        openai_base_url=_get_optional_env("OPENAI_BASE_URL"),
+        openai_api_key=_get_optional_env("OPENAI_API_KEY"),
         f5_tts_url=_get_env("F5_TTS_URL", "http://localhost:9880"),
         f5_tts_voice=_get_env("F5_TTS_VOICE", "default"),
         f5_tts_output_format=_get_env("F5_TTS_OUTPUT_FORMAT", "pcm_s16le"),

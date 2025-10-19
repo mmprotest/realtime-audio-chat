@@ -1,11 +1,11 @@
 # Realtime Audio Chat
 
-This project wires together a Groq LLM, a local Whisper transcription service, and a local F5-TTS streaming server into a realtime voice assistant. The FastAPI backend hosts a Gradio UI via FastRTC so the browser can capture microphone audio, hand it to Whisper for speech-to-text, generate a response with Groq, and immediately stream synthesized speech from F5-TTS back to the user.
+This project wires together an OpenAI-compatible LLM, a local Whisper transcription service, and a local F5-TTS streaming server into a realtime voice assistant. The FastAPI backend hosts a Gradio UI via FastRTC so the browser can capture microphone audio, hand it to Whisper for speech-to-text, generate a response with your configured OpenAI-compatible model, and immediately stream synthesized speech from F5-TTS back to the user.
 
 ## Features
 - 🎤 **Local Whisper STT** – send microphone audio to your own Whisper REST API.
 - 🗣️ **Local F5-TTS streaming** – stream raw PCM audio from a self-hosted F5-TTS server.
-- 🤖 **Groq-powered responses** – low-latency text generation via the Groq Cloud API.
+- 🤖 **OpenAI-compatible responses** – point the app at the OpenAI API or any server that implements the Chat Completions interface.
 - ⚡ **FastRTC integration** – bidirectional audio streaming with pause detection and WebRTC transport.
 
 ## Getting started
@@ -13,7 +13,7 @@ This project wires together a Groq LLM, a local Whisper transcription service, a
 ### Requirements
 - Python 3.10+
 - Running REST endpoints for Whisper (`/transcribe`) and F5-TTS (`/tts`).
-- A Groq API key (`GROQ_API_KEY`).
+- An OpenAI API key (`OPENAI_API_KEY`) or credentials for your compatible server.
 
 ### Installation
 ```bash
@@ -27,9 +27,10 @@ Create a `.env` file (optional) or export the following environment variables:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `GROQ_API_KEY` | – | Required API key for Groq. |
-| `GROQ_MODEL` | `llama-3.1-8b-instant` | Chat completion model. |
-| `GROQ_MAX_TOKENS` | `512` | Maximum tokens to generate per turn. |
+| `OPENAI_API_KEY` | – | API key for OpenAI or a compatible server (optional if provided elsewhere). |
+| `OPENAI_BASE_URL` | – | Base URL for OpenAI-compatible deployments (omit for api.openai.com). |
+| `OPENAI_MODEL` | `gpt-4o-mini` | Chat completion model. |
+| `OPENAI_MAX_TOKENS` | `512` | Maximum tokens to generate per turn. |
 | `F5_TTS_URL` | `http://localhost:9880` | Base URL of the local F5-TTS server. |
 | `F5_TTS_VOICE` | `default` | Voice identifier understood by the TTS service. |
 | `F5_TTS_OUTPUT_FORMAT` | `pcm_s16le` | Output format requested from F5-TTS. |

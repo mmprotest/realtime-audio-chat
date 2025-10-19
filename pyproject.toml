@@ -14,8 +14,8 @@ requires-python = ">=3.10"
 dependencies = [
     "fastrtc==0.1.11",
     "gradio==4.44.1",
-    "groq==0.7.0",
     "numpy==1.26.4",
+    "openai==1.35.10",
     "python-dotenv==1.0.1",
 ]
 

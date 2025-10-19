@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastrtc import AdditionalOutputs, ReplyOnPause, Stream, get_twilio_turn_credentials
 from gradio.utils import get_space
-from groq import Groq
+from openai import OpenAI
 from numpy.typing import NDArray
 
 from .config import get_settings
@@ -20,7 +20,12 @@ from .local_clients import F5LocalTTS, WhisperSTTClient
 load_dotenv()
 settings = get_settings()
 
-groq_client = Groq()
+_openai_client_kwargs: dict[str, object] = {}
+if settings.openai_base_url:
+    _openai_client_kwargs["base_url"] = settings.openai_base_url
+if settings.openai_api_key:
+    _openai_client_kwargs["api_key"] = settings.openai_api_key
+openai_client = OpenAI(**_openai_client_kwargs)
 tts_client = F5LocalTTS(
     base_url=settings.f5_tts_url,
     voice_id=settings.f5_tts_voice,
@@ -77,15 +82,13 @@ def response(audio: AudioTuple, chatbot: Optional[ChatHistory] = None):
     chatbot.append({"role": "user", "content": text})
     yield AdditionalOutputs(chatbot)
     messages.append({"role": "user", "content": text})
-    response_text = (
-        groq_client.chat.completions.create(
-            model=settings.groq_model,
-            max_tokens=settings.groq_max_tokens,
-            messages=messages,  # type: ignore[arg-type]
-        )
-        .choices[0]
-        .message.content
+    completion = openai_client.chat.completions.create(
+        model=settings.openai_model,
+        max_tokens=settings.openai_max_tokens,
+        messages=messages,  # type: ignore[arg-type]
     )
+    choice = completion.choices[0]
+    response_text = choice.message.content or ""
 
     chatbot.append({"role": "assistant", "content": response_text})
 
@@ -110,7 +113,7 @@ stream = Stream(
     rtc_configuration=get_twilio_turn_credentials() if get_space() else None,
     concurrency_limit=5 if get_space() else None,
     time_limit=90 if get_space() else None,
-    ui_args={"title": "LLM Voice Chat (Powered by Groq, F5-TTS, Whisper, and WebRTC ⚡️)"},
+    ui_args={"title": "LLM Voice Chat (Powered by OpenAI-compatible LLMs, F5-TTS, Whisper, and WebRTC ⚡️)"},
 )
 
 # Mount the STREAM UI to the FastAPI app
