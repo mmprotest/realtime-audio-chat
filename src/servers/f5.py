@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from dataclasses import dataclass
 from typing import Callable, Dict, Iterable
 
@@ -113,7 +114,9 @@ def _default_model_loader() -> F5Model:
     """Load the F5-TTS model or fall back to a lightweight synthesizer."""
 
     try:
-        from f5_tts import F5TTS  # type: ignore[import-not-found]
+        from f5_tts.api import F5TTS  # type: ignore[import-not-found]
+
+        _ensure_ffmpeg()
 
         model_name = os.getenv("F5_TTS_MODEL", "F5TTS_v1_Base")
         device = os.getenv("F5_TTS_DEVICE")
@@ -223,6 +226,49 @@ class _SimpleF5Model:
             samples.append(wave.astype(np.float32))
 
         return np.concatenate(samples) if samples else np.zeros(1, dtype=np.float32)
+
+
+def _ensure_ffmpeg() -> None:
+    """Configure pydub to point at an ffmpeg binary if one is available.
+
+    The upstream F5-TTS implementation relies on pydub, which in turn expects an
+    ffmpeg executable to exist on the system path. When running in lightweight
+    environments (e.g., Windows without a global ffmpeg install) the import would
+    otherwise fail later during synthesis with a vague warning. This helper
+    normalises the discovery of the binary and raises a clear error if none is
+    found, pointing users at the `FFMPEG_BINARY` environment variable or the
+    bundled `imageio-ffmpeg` wheel.
+    """
+
+    try:
+        from pydub import AudioSegment  # type: ignore[import-not-found]
+    except ModuleNotFoundError as exc:  # pragma: no cover - depends on optional dep
+        raise RuntimeError(
+            "pydub is required to run the F5-TTS server. Install the tts_server "
+            "extra or add pydub to your environment."
+        ) from exc
+
+    candidates = []
+    env_path = os.getenv("FFMPEG_BINARY")
+    if env_path:
+        candidates.append(env_path)
+    candidates.append(shutil.which("ffmpeg"))
+    candidates.append(shutil.which("ffmpeg.exe"))
+
+    ffmpeg_path: str | None = next((p for p in candidates if p), None)
+    if not ffmpeg_path:
+        try:  # pragma: no cover - only runs when bundled binary is available
+            import imageio_ffmpeg  # type: ignore[import-not-found]
+        except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "Unable to locate an ffmpeg binary. Install ffmpeg, set "
+                "FFMPEG_BINARY to its path, or install the imageio-ffmpeg package."
+            ) from exc
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+
+    AudioSegment.converter = ffmpeg_path
+    AudioSegment.ffmpeg = ffmpeg_path
+    AudioSegment.ffprobe = ffmpeg_path
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI convenience

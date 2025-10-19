@@ -22,6 +22,7 @@ dependencies = [
     "pydantic==2.10.6",
     "uvicorn==0.31.1",
     "PyYAML==6.0.2",
+    "imageio-ffmpeg==0.5.1",
 ]
 
 [project.optional-dependencies]
