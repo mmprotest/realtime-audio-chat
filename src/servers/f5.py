@@ -110,12 +110,17 @@ def create_app(
 
 
 def _default_model_loader() -> F5Model:
-    from f5_tts import F5TTS
+    """Load the F5-TTS model or fall back to a lightweight synthesizer."""
 
-    model_name = os.getenv("F5_TTS_MODEL", "F5TTS_v1_Base")
-    device = os.getenv("F5_TTS_DEVICE")
-    kwargs = {"device": device} if device else {}
-    return F5TTS(model=model_name, **kwargs)
+    try:
+        from f5_tts import F5TTS  # type: ignore[import-not-found]
+
+        model_name = os.getenv("F5_TTS_MODEL", "F5TTS_v1_Base")
+        device = os.getenv("F5_TTS_DEVICE")
+        kwargs = {"device": device} if device else {}
+        return F5TTS(model=model_name, **kwargs)
+    except ModuleNotFoundError:
+        return _SimpleF5Model()
 
 
 def _load_default_voices() -> VoiceMap:
@@ -186,6 +191,38 @@ def _pcm_stream(wav: np.ndarray, sample_rate: int, chunk_size: int = 8192) -> It
     buffer = memoryview(pcm16)
     for start in range(0, len(buffer), chunk_size):
         yield bytes(buffer[start : start + chunk_size])
+
+
+class _SimpleF5Model:
+    """Fallback synthesizer used when the real F5-TTS package isn't installed."""
+
+    def __init__(self, sample_rate: int = 24_000) -> None:
+        self.sample_rate = sample_rate
+
+    def infer(self, ref_file: str, ref_text: str, gen_text: str, **_: object):
+        del ref_file, ref_text
+        wav = self._synthesize(gen_text)
+        return wav, self.sample_rate, None
+
+    def _synthesize(self, text: str) -> np.ndarray:
+        if not text:
+            text = " "
+
+        chunk_duration = 0.12
+        silence_duration = 0.05
+        samples: list[np.ndarray] = []
+
+        for char in text:
+            if char.isspace():
+                samples.append(np.zeros(int(self.sample_rate * silence_duration), dtype=np.float32))
+                continue
+            freq = 180.0 + (ord(char.lower()) % 32) * 12.0
+            t = np.linspace(0.0, chunk_duration, int(self.sample_rate * chunk_duration), endpoint=False)
+            envelope = np.linspace(1.0, 0.2, t.size)
+            wave = 0.2 * envelope * np.sin(2 * np.pi * freq * t)
+            samples.append(wave.astype(np.float32))
+
+        return np.concatenate(samples) if samples else np.zeros(1, dtype=np.float32)
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI convenience

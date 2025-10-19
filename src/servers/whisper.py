@@ -77,23 +77,33 @@ def create_app(
 
 
 def _default_model_loader() -> object:
-    import whisper
+    """Load a Whisper model using the faster-whisper backend."""
+
+    from faster_whisper import WhisperModel
 
     model_name = os.getenv("WHISPER_MODEL", "base")
     device = os.getenv("WHISPER_DEVICE")
-    kwargs = {"device": device} if device else {}
-    return whisper.load_model(model_name, **kwargs)
+    compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "default")
+
+    kwargs: dict[str, object] = {}
+    if device:
+        kwargs["device"] = device
+    if compute_type and compute_type.lower() != "default":
+        kwargs["compute_type"] = compute_type
+
+    return WhisperModel(model_name, **kwargs)
 
 
 def _default_transcriber_factory(model: object) -> Transcriber:
-    import whisper
+    from faster_whisper import WhisperModel
+
+    if not isinstance(model, WhisperModel):  # pragma: no cover - defensive
+        raise TypeError("Expected model to be an instance of faster_whisper.WhisperModel")
 
     def _transcribe(audio: AudioArray, language: str | None) -> str:
-        audio = whisper.pad_or_trim(audio)
-        mel = whisper.log_mel_spectrogram(audio)
-        options = whisper.DecodingOptions(language=language, fp16=False)
-        result = whisper.decode(model, mel, options)
-        return result.text.strip()
+        segments, _ = model.transcribe(audio, language=language)
+        texts = [segment.text.strip() for segment in segments if segment.text.strip()]
+        return " ".join(texts)
 
     return _transcribe
 

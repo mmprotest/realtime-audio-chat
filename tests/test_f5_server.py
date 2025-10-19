@@ -3,8 +3,11 @@ from __future__ import annotations
 import io
 import wave
 
-import numpy as np
 import pytest
+
+pytest.importorskip("fastapi")
+np = pytest.importorskip("numpy")
+
 from fastapi.testclient import TestClient
 
 from src.servers.f5 import VoiceConfig, create_app

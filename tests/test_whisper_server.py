@@ -4,7 +4,11 @@ import base64
 import io
 import wave
 
-import numpy as np
+import pytest
+
+pytest.importorskip("fastapi")
+np = pytest.importorskip("numpy")
+
 from fastapi.testclient import TestClient
 
 from src.servers.whisper import create_app
