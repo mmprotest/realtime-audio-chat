@@ -16,9 +16,33 @@ This project wires together an OpenAI-compatible LLM, a local Whisper transcript
 - For local audio services you can either supply your own deployments or run the bundled Whisper and F5-TTS FastAPI apps.
 
 ### Installation
+
+#### Windows (PowerShell)
+Run the bundled setup script to automate every prerequisite, including FFmpeg:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+./scripts/setup_windows.ps1
+```
+
+The script will:
+
+- Validate that Python 3.10+ is available (and tell you how to install it if not).
+- Create or reuse a `.venv` virtual environment in the repository.
+- Upgrade `pip`, install the packages from `requirements.txt`, and add the optional `stt_server`/`tts_server` extras so the bundled Whisper and F5-TTS services are ready to run.
+- Download the latest FFmpeg “essentials” build for Windows into `tools/ffmpeg` and add its `bin` directory to your user `PATH` (you may need to reopen your terminal for the new PATH entry to take effect).
+
+After the script finishes, activate the environment and launch the app:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+python -m src.app
+```
+
+#### macOS/Linux
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 # Optional: install inference dependencies for the bundled servers
 pip install '.[stt_server]' '.[tts_server]'
