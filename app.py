@@ -10,6 +10,7 @@ from fastrtc import (
     Stream,
     get_twilio_turn_credentials,
 )
+from fastrtc.tracks import WebRTCData
 from fastrtc_whisper_cpp import get_stt_model
 from gradio.utils import get_space
 import numpy as np
@@ -55,10 +56,62 @@ def _should_flush(sentence_buffer: str) -> bool:
 # See "Talk to Claude" in Cookbook for an example of how to keep
 # track of the chat history.
 def response(
-    audio: tuple[int, NDArray[np.int16 | np.float32]],
+    raw_audio=None,
+    maybe_session_or_chatbot=None,
+    *extra_args,
     chatbot: list[dict] | None = None,
+    **kwargs,
 ):
-    chatbot = chatbot or []
+    """Handle audio frames from FastRTC with backwards-compatible signatures."""
+
+    if raw_audio is None and not extra_args and maybe_session_or_chatbot is None:
+        raise ValueError("response handler received no arguments")
+
+    # FastRTC 0.0.20+ sends an initial "__webrtc_value__" marker before
+    # the actual WebRTCData payload is streamed to the handler. Bail out early
+    # for that sentinel call so the generator stays alive without raising.
+    if isinstance(raw_audio, str) and raw_audio == "__webrtc_value__":
+        return
+
+    session_id: str | None = kwargs.get("session_id")
+    chat_history: list[dict] | None = kwargs.get("chat_history")
+
+    positional_candidates: list[object] = []
+    if maybe_session_or_chatbot is not None:
+        positional_candidates.append(maybe_session_or_chatbot)
+    positional_candidates.extend(extra_args)
+
+    # Prefer explicitly supplied chatbot keyword argument, otherwise fall back to
+    # chat_history kwarg or positional list payloads from FastRTC.
+    chatbot = chatbot or chat_history
+
+    # Walk through positional args to collect session identifiers, chatbot
+    # histories, or fallback audio payloads for older calling conventions.
+    for candidate in positional_candidates:
+        if isinstance(candidate, str) and session_id is None:
+            session_id = candidate
+            continue
+        if isinstance(candidate, list) and chatbot is None:
+            chatbot = candidate
+            continue
+        if isinstance(candidate, WebRTCData) and not isinstance(raw_audio, WebRTCData):
+            raw_audio = candidate
+
+    audio_payload: tuple[int, NDArray[np.int16 | np.float32]] | None = None
+    if isinstance(raw_audio, WebRTCData):
+        session_id = raw_audio.webrtc_id or session_id
+        audio_payload = raw_audio.audio
+    elif isinstance(raw_audio, tuple):
+        audio_payload = raw_audio
+
+    if audio_payload is None:
+        raise ValueError("Missing audio payload in response handler")
+
+    _ = session_id  # session identifier reserved for future use
+
+    chatbot = (chatbot or [])[:]
+
+    audio = audio_payload
     messages = [{"role": d["role"], "content": d["content"]} for d in chatbot]
     start = time.time()
     text = stt_model.stt(audio)
