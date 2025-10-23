@@ -49,6 +49,7 @@ def create_app(
         factory = transcriber_factory or _default_transcriber_factory
         app.state.transcribe = factory(app.state.model)
         app.state.target_sample_rate = _target_sample_rate()
+        app.state.fallback_language = _fallback_language()
 
     @app.get("/healthz")
     async def _health() -> dict[str, str]:
@@ -72,7 +73,29 @@ def create_app(
             raise HTTPException(status_code=400, detail="Audio payload contains no data")
 
         transcribe = app.state.transcribe  # type: ignore[attr-defined]
-        text = transcribe(resampled, request.language)
+        fallback_language = app.state.fallback_language  # type: ignore[attr-defined]
+        try:
+            text = transcribe(resampled, request.language)
+        except ValueError as exc:
+            if (
+                request.language is None
+                and _language_detection_failed(exc)
+                and fallback_language
+            ):
+                try:
+                    text = transcribe(resampled, fallback_language)
+                except ValueError as fallback_exc:
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Language detection failed; specify the language parameter",
+                    ) from fallback_exc
+            elif request.language is None and _language_detection_failed(exc):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Language detection failed; specify the language parameter",
+                ) from exc
+            else:
+                raise
         duration = len(resampled) / float(target_rate)
         return TranscribeResponse(text=text, duration=duration)
 
@@ -146,6 +169,16 @@ def _target_sample_rate() -> int:
         return int(os.getenv("WHISPER_TARGET_SAMPLE_RATE", str(_DEFAULT_SAMPLE_RATE)))
     except ValueError:  # pragma: no cover - defensive
         return _DEFAULT_SAMPLE_RATE
+
+
+def _fallback_language() -> str | None:
+    fallback = os.getenv("WHISPER_FALLBACK_LANGUAGE", "en").strip()
+    return fallback or None
+
+
+def _language_detection_failed(error: ValueError) -> bool:
+    message = str(error).lower()
+    return "max()" in message and "empty" in message
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI convenience

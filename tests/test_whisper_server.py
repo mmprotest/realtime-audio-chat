@@ -72,3 +72,48 @@ def test_transcribe_rejects_empty_audio():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Audio payload contains no data"
+
+
+def test_transcribe_falls_back_to_default_language(monkeypatch):
+    monkeypatch.setenv("WHISPER_FALLBACK_LANGUAGE", "en")
+    calls: list[str | None] = []
+
+    def factory(model: object):
+        def _transcribe(audio: np.ndarray, language: str | None) -> str:
+            calls.append(language)
+            if language is None:
+                raise ValueError("max() arg is an empty sequence")
+            return "fallback succeeded"
+
+        return _transcribe
+
+    app = create_app(model_loader=lambda: object(), transcriber_factory=factory)
+    audio = (np.sin(np.linspace(0, 1, 16000) * 2 * np.pi * 220) * 0.5 * 32767).astype(np.int16)
+    payload = {"audio": base64.b64encode(_wav_bytes(audio, 16000)).decode("ascii")}
+
+    with TestClient(app) as client:
+        response = client.post("/transcribe", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "fallback succeeded"
+    assert calls == [None, "en"]
+
+
+def test_transcribe_surfaces_language_detection_failure(monkeypatch):
+    monkeypatch.setenv("WHISPER_FALLBACK_LANGUAGE", "en")
+
+    def factory(model: object):
+        def _transcribe(audio: np.ndarray, language: str | None) -> str:
+            raise ValueError("max() arg is an empty sequence")
+
+        return _transcribe
+
+    app = create_app(model_loader=lambda: object(), transcriber_factory=factory)
+    audio = (np.sin(np.linspace(0, 1, 16000) * 2 * np.pi * 220) * 0.5 * 32767).astype(np.int16)
+    payload = {"audio": base64.b64encode(_wav_bytes(audio, 16000)).decode("ascii")}
+
+    with TestClient(app) as client:
+        response = client.post("/transcribe", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Language detection failed; specify the language parameter"
