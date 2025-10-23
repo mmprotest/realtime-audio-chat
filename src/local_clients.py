@@ -143,7 +143,19 @@ def _ensure_mono(samples: AudioArray) -> np.ndarray:
         return array
     if array.ndim > 2:
         raise ValueError("Audio arrays with more than 2 dimensions are not supported")
-    return array.mean(axis=-1)
+
+    # Handle common single-channel layouts produced by WebRTC/Gradio where audio
+    # samples arrive with an explicit singleton channel dimension (either first
+    # or last).  Flattening here preserves the full timeline instead of
+    # collapsing it down to a single averaged frame.
+    if 1 in array.shape:
+        return array.reshape(-1)
+
+    # For true multi-channel audio, down-mix by averaging across the channel
+    # axis.  We heuristically treat the smaller dimension as the channel count,
+    # which covers both channel-first and channel-last sample layouts.
+    channel_axis = 0 if array.shape[0] <= array.shape[1] else 1
+    return array.mean(axis=channel_axis)
 
 
 def _to_pcm16(samples: np.ndarray) -> np.ndarray:

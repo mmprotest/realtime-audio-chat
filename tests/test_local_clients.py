@@ -8,7 +8,7 @@ import pytest
 
 np = pytest.importorskip("numpy")
 
-from src.local_clients import F5LocalTTS, WhisperSTTClient
+from src.local_clients import F5LocalTTS, WhisperSTTClient, _ensure_mono
 
 
 def test_whisper_client_posts_audio():
@@ -64,3 +64,17 @@ def test_whisper_client_validates_response():
     with pytest.raises(ValueError):
         client.stt((16000, np.zeros(1600, dtype=np.float32)))
     client.close()
+
+
+def test_ensure_mono_preserves_singleton_channel_last():
+    samples = np.arange(1600, dtype=np.float32).reshape(-1, 1)
+    mono = _ensure_mono(samples)
+    assert mono.shape == (1600,)
+    assert mono[0] == pytest.approx(samples[0, 0])
+
+
+def test_ensure_mono_preserves_singleton_channel_first():
+    samples = np.arange(1600, dtype=np.float32).reshape(1, -1)
+    mono = _ensure_mono(samples)
+    assert mono.shape == (1600,)
+    assert mono[-1] == pytest.approx(samples[0, -1])

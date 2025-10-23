@@ -139,6 +139,13 @@ def response(
 
     history.append({"role": "assistant", "content": response_text})
 
+    if not response_text.strip():
+        overall_duration = time.perf_counter() - overall_start
+        print("[TTS] Skipping audio generation (empty response)")
+        print(f"[Pipeline] Total duration: {overall_duration:.2f}s")
+        yield AdditionalOutputs(history)
+        return
+
     tts_start = time.perf_counter()
     tts_client = _get_tts_client()
     chunks = tts_client.text_to_speech.convert_as_stream(
