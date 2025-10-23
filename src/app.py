@@ -141,23 +141,30 @@ def response(
     _ = event  # ReplyOnPause provides an interaction event we don't currently use.
     history = _normalize_chat_history(chatbot)
     messages = _chatbot_to_messages(history)
-    start = time.time()
+    overall_start = time.perf_counter()
+
+    stt_start = time.perf_counter()
     text = stt_model.stt(audio)
-    print("transcription", time.time() - start)
-    print("prompt", text)
+    stt_duration = time.perf_counter() - stt_start
+    print(f"[STT] Transcription ({stt_duration:.2f}s): {text}")
     history.append({"role": "user", "content": text})
     yield AdditionalOutputs(history)
     messages.append({"role": "user", "content": text})
+
+    llm_start = time.perf_counter()
     completion = openai_client.chat.completions.create(
         model=settings.openai_model,
         max_tokens=settings.openai_max_tokens,
         messages=messages,  # type: ignore[arg-type]
     )
+    llm_duration = time.perf_counter() - llm_start
     choice = completion.choices[0]
     response_text = choice.message.content or ""
+    print(f"[LLM] Response ({llm_duration:.2f}s): {response_text}")
 
     history.append({"role": "assistant", "content": response_text})
 
+    tts_start = time.perf_counter()
     chunks = tts_client.text_to_speech.convert_as_stream(
         text=response_text,
         voice_id=settings.f5_tts_voice,
@@ -165,6 +172,10 @@ def response(
     )
     for sample_rate, audio_array in _pcm_chunks_to_arrays(chunks, settings.tts_sample_rate):
         yield (sample_rate, audio_array)
+    tts_duration = time.perf_counter() - tts_start
+    overall_duration = time.perf_counter() - overall_start
+    print(f"[TTS] Audio generation ({tts_duration:.2f}s)")
+    print(f"[Pipeline] Total duration: {overall_duration:.2f}s")
     yield AdditionalOutputs(history)
 
 
