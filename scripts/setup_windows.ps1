@@ -159,10 +159,11 @@ function Show-NextSteps {
     param([string]$RepoRoot)
 
     Write-Section 'Setup complete'
+
     Write-Host "To start using the virtual environment, run:" -ForegroundColor Cyan
-    Write-Host "    `".\\.venv\\Scripts\\Activate.ps1`" -ForegroundColor Yellow
+    Write-Host '    ".\.venv\Scripts\Activate.ps1"' -ForegroundColor Yellow
     Write-Host 'After activation you can launch the app with:' -ForegroundColor Cyan
-    Write-Host "    python -m src.app" -ForegroundColor Yellow
+    Write-Host '    python -m src.app' -ForegroundColor Yellow
     Write-Host 'If PATH was updated for FFmpeg, open a new terminal session to pick up the change.' -ForegroundColor Cyan
 }
 
