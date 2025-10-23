@@ -2,25 +2,54 @@ import os
 import time
 
 import gradio as gr
-import numpy as np
 from dotenv import load_dotenv
-from elevenlabs import ElevenLabs
 from fastapi import FastAPI
 from fastrtc import (
     AdditionalOutputs,
     ReplyOnPause,
     Stream,
-    get_stt_model,
     get_twilio_turn_credentials,
 )
+from fastrtc_whisper_cpp import get_stt_model
 from gradio.utils import get_space
-from groq import Groq
+import numpy as np
 from numpy.typing import NDArray
+from openai import OpenAI
+
+from f5_adapter import F5TTSModel
 
 load_dotenv()
-groq_client = Groq()
-tts_client = ElevenLabs(api_key=os.getenv("ELEVENLABS_API_KEY"))
+
+openai_client = OpenAI(
+    api_key=os.getenv("LOCAL_OPENAI_API_KEY", "dummy"),
+    base_url=os.getenv("LOCAL_OPENAI_BASE_URL", "http://localhost:8000/v1"),
+)
+
 stt_model = get_stt_model()
+
+f5_tts_model = F5TTSModel(
+    ref_wav=os.getenv("F5_REFERENCE_WAV", "reference.wav"),
+    ref_text=os.getenv("F5_REFERENCE_TEXT"),
+    model_name=os.getenv("F5_MODEL_NAME"),
+    target_sample_rate=(
+        int(os.getenv("F5_TARGET_SAMPLE_RATE"))
+        if os.getenv("F5_TARGET_SAMPLE_RATE")
+        else None
+    ),
+)
+
+LOCAL_OPENAI_MODEL = os.getenv("LOCAL_OPENAI_MODEL", "llama-3.1-8b-instruct")
+
+
+def _should_flush(sentence_buffer: str) -> bool:
+    stripped = sentence_buffer.strip()
+    if not stripped:
+        return False
+    if stripped.endswith((".", "!", "?", "…")):
+        return True
+    if stripped.endswith("\n"):
+        return True
+    return False
 
 
 # See "Talk to Claude" in Cookbook for an example of how to keep
@@ -38,26 +67,36 @@ def response(
     chatbot.append({"role": "user", "content": text})
     yield AdditionalOutputs(chatbot)
     messages.append({"role": "user", "content": text})
-    response_text = (
-        groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            max_tokens=512,
-            messages=messages,  # type: ignore
-        )
-        .choices[0]
-        .message.content
+    completion_stream = openai_client.chat.completions.create(
+        model=LOCAL_OPENAI_MODEL,
+        max_tokens=512,
+        messages=messages,  # type: ignore
+        stream=True,
     )
 
-    chatbot.append({"role": "assistant", "content": response_text})
+    full_text = ""
+    sentence_buffer = ""
 
-    for chunk in tts_client.text_to_speech.convert_as_stream(
-        text=response_text,  # type: ignore
-        voice_id="JBFqnCBsd6RMkjVDRZzb",
-        model_id="eleven_multilingual_v2",
-        output_format="pcm_24000",
-    ):
-        audio_array = np.frombuffer(chunk, dtype=np.int16).reshape(1, -1)
-        yield (24000, audio_array)
+    for chunk in completion_stream:
+        for choice in chunk.choices:
+            token = (choice.delta.content or "") if choice.delta else ""
+            if not token:
+                continue
+            sentence_buffer += token
+            full_text += token
+            if _should_flush(sentence_buffer):
+                for audio_chunk in f5_tts_model.stream_tts_sync(
+                    sentence_buffer.strip()
+                ):
+                    yield audio_chunk
+                sentence_buffer = ""
+
+    if sentence_buffer.strip():
+        for audio_chunk in f5_tts_model.stream_tts_sync(sentence_buffer.strip()):
+            yield audio_chunk
+
+    response_text = " ".join(full_text.strip().split())
+    chatbot.append({"role": "assistant", "content": response_text})
     yield AdditionalOutputs(chatbot)
 
 
@@ -72,7 +111,7 @@ stream = Stream(
     rtc_configuration=get_twilio_turn_credentials() if get_space() else None,
     concurrency_limit=5 if get_space() else None,
     time_limit=90 if get_space() else None,
-    ui_args={"title": "LLM Voice Chat (Powered by Groq, ElevenLabs, and WebRTC ⚡️)"},
+    ui_args={"title": "LLM Voice Chat (Local LLM, Whisper, and F5-TTS ⚡️)"},
 )
 
 # Mount the STREAM UI to the FastAPI app
