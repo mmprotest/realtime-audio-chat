@@ -65,6 +65,22 @@ ChatEntry = ChatMessageDict | Sequence[str] | str
 ChatHistory = list[ChatEntry]
 
 
+def _normalize_chat_history(chatbot: Optional[ChatHistory | ChatEntry]) -> ChatHistory:
+    """Ensure the chatbot history is always a mutable list."""
+
+    if chatbot is None:
+        return []
+    if isinstance(chatbot, list):
+        return chatbot
+    if isinstance(chatbot, dict):
+        return [chatbot]
+    if isinstance(chatbot, str):
+        return [{"role": "user", "content": chatbot}]
+    if isinstance(chatbot, Sequence):
+        return list(chatbot)
+    return []
+
+
 def _pcm_chunks_to_arrays(
     chunks: Iterable[bytes],
     sample_rate: int,
@@ -119,18 +135,18 @@ def _chatbot_to_messages(chatbot: ChatHistory) -> list[ChatMessageDict]:
 
 def response(
     audio: AudioTuple,
-    chatbot: Optional[ChatHistory] = None,
+    chatbot: Optional[ChatHistory | ChatEntry] = None,
     event: object | None = None,
 ):
     _ = event  # ReplyOnPause provides an interaction event we don't currently use.
-    chatbot = chatbot or []
-    messages = _chatbot_to_messages(chatbot)
+    history = _normalize_chat_history(chatbot)
+    messages = _chatbot_to_messages(history)
     start = time.time()
     text = stt_model.stt(audio)
     print("transcription", time.time() - start)
     print("prompt", text)
-    chatbot.append({"role": "user", "content": text})
-    yield AdditionalOutputs(chatbot)
+    history.append({"role": "user", "content": text})
+    yield AdditionalOutputs(history)
     messages.append({"role": "user", "content": text})
     completion = openai_client.chat.completions.create(
         model=settings.openai_model,
@@ -140,7 +156,7 @@ def response(
     choice = completion.choices[0]
     response_text = choice.message.content or ""
 
-    chatbot.append({"role": "assistant", "content": response_text})
+    history.append({"role": "assistant", "content": response_text})
 
     chunks = tts_client.text_to_speech.convert_as_stream(
         text=response_text,
@@ -149,7 +165,7 @@ def response(
     )
     for sample_rate, audio_array in _pcm_chunks_to_arrays(chunks, settings.tts_sample_rate):
         yield (sample_rate, audio_array)
-    yield AdditionalOutputs(chatbot)
+    yield AdditionalOutputs(history)
 
 
 chatbot = gr.Chatbot(type="messages")
