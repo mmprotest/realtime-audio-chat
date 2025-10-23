@@ -139,6 +139,58 @@ def test_transcribe_rejects_empty_transcription():
     assert response.json()["detail"] == "Transcription produced no text"
 
 
+def test_transcribe_retries_with_fallback_when_blank(monkeypatch):
+    monkeypatch.setenv("WHISPER_FALLBACK_LANGUAGE", "en")
+    calls: list[str | None] = []
+
+    def factory(model: object):
+        def _transcribe(audio: np.ndarray, language: str | None) -> str:
+            calls.append(language)
+            if language is None:
+                return "   "
+            if language == "en":
+                return "hello world"
+            return ""
+
+        return _transcribe
+
+    app = create_app(model_loader=lambda: object(), transcriber_factory=factory)
+    audio = (np.sin(np.linspace(0, 1, 16000) * 2 * np.pi * 220) * 0.5 * 32767).astype(np.int16)
+    payload = {"audio": base64.b64encode(_wav_bytes(audio, 16000)).decode("ascii")}
+
+    with TestClient(app) as client:
+        response = client.post("/transcribe", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "hello world"
+    assert calls == [None, "en"]
+
+
+def test_transcribe_treats_blank_language_as_missing():
+    observed: list[str | None] = []
+
+    def factory(model: object):
+        def _transcribe(audio: np.ndarray, language: str | None) -> str:
+            observed.append(language)
+            return "ok"
+
+        return _transcribe
+
+    app = create_app(model_loader=lambda: object(), transcriber_factory=factory)
+    audio = (np.sin(np.linspace(0, 1, 16000) * 2 * np.pi * 220) * 0.5 * 32767).astype(np.int16)
+    payload = {
+        "audio": base64.b64encode(_wav_bytes(audio, 16000)).decode("ascii"),
+        "language": "  ",
+    }
+
+    with TestClient(app) as client:
+        response = client.post("/transcribe", json=payload)
+
+    assert response.status_code == 200
+    assert response.json()["text"] == "ok"
+    assert observed == [None]
+
+
 def test_default_transcriber_factory_normalises_segments(monkeypatch):
     faster_whisper = pytest.importorskip("faster_whisper")
 
