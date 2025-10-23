@@ -91,6 +91,8 @@ def create_app(
     async def _tts(payload: dict[str, object]):
         request = _parse_request(payload)
         voice_id = request.voice_id or app.state.default_voice_id  # type: ignore[attr-defined]
+        if voice_id == "default":
+            voice_id = app.state.default_voice_id  # type: ignore[attr-defined]
         voices: VoiceMap = app.state.voices  # type: ignore[attr-defined]
         if voice_id not in voices:
             raise HTTPException(status_code=404, detail=f"Unknown voice '{voice_id}'")

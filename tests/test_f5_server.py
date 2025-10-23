@@ -72,6 +72,26 @@ def test_tts_rejects_unknown_voice(tmp_path, voice_files):
     assert response.status_code == 404
 
 
+def test_tts_accepts_default_alias(tmp_path, voice_files):
+    model = StubF5Model()
+
+    def voice_loader():
+        return {"demo": voice_files}
+
+    app = create_app(model_loader=lambda: model, voice_loader=voice_loader, default_voice_id="demo")
+    with TestClient(app) as client:
+        response = client.post("/tts", json={"text": "Hi", "voice_id": "default"})
+        audio_bytes = b"".join(response.iter_bytes())
+
+    assert response.status_code == 200
+    assert audio_bytes
+    # The stub model should still be invoked with the actual demo voice assets.
+    assert model.calls
+    ref_file, _, gen_text = model.calls[0]
+    assert ref_file == voice_files.audio_path
+    assert gen_text == "Hi"
+
+
 def test_voices_endpoint_lists_config(tmp_path, voice_files):
     model = StubF5Model()
 
