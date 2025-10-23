@@ -50,12 +50,21 @@ class F5TTSModel:
             )
 
     def _infer_once(self, text: str) -> tuple[int, NDArray[np.float32]]:
-        wav, sample_rate, _ = self._f5.inference(
-            ref_file=self._ref_wav,
-            ref_text=self._ref_text,
-            gen_text=text,
+        infer_kwargs = {
+            "ref_file": self._ref_wav,
+            "ref_text": self._ref_text,
+            "gen_text": text,
             **self._inference_kwargs,
-        )
+        }
+
+        if hasattr(self._f5, "inference"):
+            wav, sample_rate, _ = self._f5.inference(**infer_kwargs)
+        elif hasattr(self._f5, "infer"):
+            wav, sample_rate, _ = self._f5.infer(**infer_kwargs)
+        else:
+            raise AttributeError(
+                "F5TTS API changed: expected `infer` or `inference` method to be available."
+            )
 
         audio = np.asarray(wav, dtype=np.float32).reshape(1, -1)
         if self._target_sample_rate is not None and sample_rate != self._target_sample_rate:
