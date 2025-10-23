@@ -55,33 +55,50 @@ def _should_flush(sentence_buffer: str) -> bool:
 
 # See "Talk to Claude" in Cookbook for an example of how to keep
 # track of the chat history.
-def response(
-    audio: tuple[int, NDArray[np.int16 | np.float32]] | WebRTCData,
-    maybe_session_or_chatbot: str | list[dict] | None = None,
-    maybe_chatbot: list[dict] | None = None,
-):
+def response(*args):
+    if not args:
+        raise ValueError("response handler received no arguments")
+
+    raw_audio = args[0]
+    remaining_args = list(args[1:])
+
+    # FastRTC 0.0.20+ sends an initial "__webrtc_value__" marker before
+    # the actual WebRTCData payload is streamed to the handler. Bail out early
+    # for that sentinel call so the generator stays alive without raising.
+    if isinstance(raw_audio, str) and raw_audio == "__webrtc_value__":
+        return
+
     session_id: str | None = None
+    chatbot: list[dict] | None = None
+
+    # The first remaining argument is the session identifier when provided.
+    if remaining_args:
+        possible_session = remaining_args.pop(0)
+        if isinstance(possible_session, str):
+            session_id = possible_session
+        else:
+            remaining_args.insert(0, possible_session)
+
+    # A chatbot history (list[dict]) may be passed either as the second
+    # positional argument or via additional inputs.
+    for candidate in remaining_args:
+        if isinstance(candidate, list):
+            chatbot = candidate
+            break
+
     audio_payload: tuple[int, NDArray[np.int16 | np.float32]] | None
-    if isinstance(audio, WebRTCData):
-        session_id = audio.webrtc_id
-        audio_payload = audio.audio
+    if isinstance(raw_audio, WebRTCData):
+        session_id = raw_audio.webrtc_id or session_id
+        audio_payload = raw_audio.audio
     else:
-        audio_payload = audio
+        audio_payload = raw_audio
 
     if audio_payload is None:
         raise ValueError("Missing audio payload in response handler")
 
-    chatbot: list[dict]
-    if isinstance(maybe_session_or_chatbot, list) and maybe_chatbot is None:
-        chatbot = maybe_session_or_chatbot
-    else:
-        chatbot = maybe_chatbot or []
-        if isinstance(maybe_session_or_chatbot, list):
-            chatbot = maybe_session_or_chatbot
-
     _ = session_id  # session identifier reserved for future use
 
-    chatbot = chatbot or []
+    chatbot = (chatbot or [])[:]
 
     audio = audio_payload
     messages = [{"role": d["role"], "content": d["content"]} for d in chatbot]
