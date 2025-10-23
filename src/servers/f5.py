@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import os
 import shutil
-from pathlib import Path
+from collections.abc import AsyncIterator, Callable, Iterable
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Callable, Dict, Iterable
+from pathlib import Path
+from typing import Dict
 
 import numpy as np
 import yaml
@@ -38,10 +40,6 @@ class F5Model:
     ) -> tuple[np.ndarray, int, object]: ...
 
 
-class TTSRequest(yaml.YAMLObject):
-    pass
-
-
 class TTSRequestModel:
     def __init__(self, *, text: str, voice_id: str | None, output_format: str | None) -> None:
         self.text = text
@@ -57,20 +55,32 @@ def create_app(
 ) -> FastAPI:
     """Create a FastAPI server that exposes `/tts` for streaming audio."""
 
-    app = FastAPI(title="Local F5-TTS Server", version="1.0.0")
-
-    @app.on_event("startup")
-    async def _load() -> None:  # pragma: no cover - simple initialization
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         loader = model_loader or _default_model_loader
         app.state.model = loader()
-        loader_voice = voice_loader or _load_default_voices
-        voices = loader_voice()
+
+        voices_provider = voice_loader or _load_default_voices
+        voices = voices_provider()
         if not voices:
             raise RuntimeError("No voices are configured for the F5-TTS server")
         app.state.voices = voices
-        app.state.default_voice_id = default_voice_id or os.getenv("F5_TTS_VOICE", next(iter(voices)))
+
+        configured_default = default_voice_id or os.getenv("F5_TTS_VOICE")
+        fallback_voice = next(iter(voices))
+        app.state.default_voice_id = configured_default or fallback_voice
         if app.state.default_voice_id not in voices:
             raise RuntimeError(f"Default voice '{app.state.default_voice_id}' is not available")
+
+        try:
+            yield
+        finally:
+            model = getattr(app.state, "model", None)
+            closer = getattr(model, "close", None)
+            if callable(closer):
+                closer()
+
+    app = FastAPI(title="Local F5-TTS Server", version="1.0.0", lifespan=lifespan)
 
     @app.get("/voices")
     async def _voices() -> dict[str, object]:
