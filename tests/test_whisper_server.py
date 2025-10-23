@@ -59,3 +59,16 @@ def test_transcribe_rejects_invalid_base64():
         response = client.post("/transcribe", json={"audio": "@@@"})
     assert response.status_code == 400
     assert response.json()["detail"] == "Invalid base64 audio"
+
+
+def test_transcribe_rejects_empty_audio():
+    app = create_app(model_loader=lambda: object(), transcriber_factory=lambda model: lambda a, b: "")
+    silence = np.zeros(0, dtype=np.int16)
+    payload = {
+        "audio": base64.b64encode(_wav_bytes(silence, 16000)).decode("ascii"),
+    }
+    with TestClient(app) as client:
+        response = client.post("/transcribe", json=payload)
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Audio payload contains no data"

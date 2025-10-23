@@ -68,6 +68,9 @@ def create_app(
         target_rate = app.state.target_sample_rate  # type: ignore[attr-defined]
         resampled = _resample(samples, source_rate, target_rate)
 
+        if resampled.size == 0 or np.allclose(resampled, 0.0):
+            raise HTTPException(status_code=400, detail="Audio payload contains no data")
+
         transcribe = app.state.transcribe  # type: ignore[attr-defined]
         text = transcribe(resampled, request.language)
         duration = len(resampled) / float(target_rate)
