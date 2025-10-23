@@ -14,6 +14,7 @@ class Settings:
     openai_max_tokens: int
     openai_base_url: str | None
     openai_api_key: str | None
+    groq_model: str
     f5_tts_url: str
     f5_tts_voice: str
     f5_tts_output_format: str
@@ -48,6 +49,7 @@ def get_settings() -> Settings:
         openai_max_tokens=openai_max_tokens,
         openai_base_url=_get_optional_env("OPENAI_BASE_URL"),
         openai_api_key=_get_optional_env("OPENAI_API_KEY"),
+        groq_model=_get_env("GROQ_MODEL", "llama-3.1-8b-instant"),
         f5_tts_url=_get_env("F5_TTS_URL", "http://localhost:9880"),
         f5_tts_voice=_get_env("F5_TTS_VOICE", "default"),
         f5_tts_output_format=_get_env("F5_TTS_OUTPUT_FORMAT", "pcm_s16le"),
