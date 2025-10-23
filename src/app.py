@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Generator, Iterable, Optional, Sequence
+from collections.abc import Generator, Iterable
+from functools import lru_cache
 
 import gradio as gr
 import numpy as np
@@ -15,6 +16,12 @@ import httpx
 from openai import OpenAI
 from numpy.typing import NDArray
 
+from .chat_history import (
+    ChatEntry,
+    ChatHistory,
+    chatbot_to_messages,
+    normalize_chat_history,
+)
 from .config import get_settings
 from .local_clients import F5LocalTTS, WhisperSTTClient
 
@@ -36,49 +43,35 @@ def _create_openai_client() -> OpenAI:
     except TypeError as exc:  # pragma: no cover - defensive guard for Windows envs
         if "proxies" not in str(exc):
             raise
-        # Some installations ship a version of httpx that expects the newer
-        # ``proxy=`` keyword instead of ``proxies=``.  In that case we bypass the
-        # default client construction (which forwards the incompatible argument)
-        # and build an httpx client ourselves. ``trust_env=True`` ensures that
-        # any proxy configuration from the host environment is still honoured.
         http_client = httpx.Client(trust_env=True)
         return OpenAI(http_client=http_client, **_openai_client_kwargs)
 
 
-openai_client = _create_openai_client()
-tts_client = F5LocalTTS(
-    base_url=settings.f5_tts_url,
-    voice_id=settings.f5_tts_voice,
-    output_format=settings.f5_tts_output_format,
-    timeout=settings.http_timeout,
-)
-stt_model = WhisperSTTClient(
-    base_url=settings.whisper_url,
-    language=settings.whisper_language,
-    timeout=settings.http_timeout,
-)
+@lru_cache(maxsize=1)
+def _get_openai_client() -> OpenAI:
+    return _create_openai_client()
+
+
+@lru_cache(maxsize=1)
+def _get_tts_client() -> F5LocalTTS:
+    return F5LocalTTS(
+        base_url=settings.f5_tts_url,
+        voice_id=settings.f5_tts_voice,
+        output_format=settings.f5_tts_output_format,
+        timeout=settings.http_timeout,
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_stt_client() -> WhisperSTTClient:
+    return WhisperSTTClient(
+        base_url=settings.whisper_url,
+        language=settings.whisper_language,
+        timeout=settings.http_timeout,
+    )
 
 
 AudioTuple = tuple[int, NDArray[np.int16 | np.float32]]
-ChatMessageDict = dict[str, str]
-ChatEntry = ChatMessageDict | Sequence[str] | str
-ChatHistory = list[ChatEntry]
-
-
-def _normalize_chat_history(chatbot: Optional[ChatHistory | ChatEntry]) -> ChatHistory:
-    """Ensure the chatbot history is always a mutable list."""
-
-    if chatbot is None:
-        return []
-    if isinstance(chatbot, list):
-        return chatbot
-    if isinstance(chatbot, dict):
-        return [chatbot]
-    if isinstance(chatbot, str):
-        return [{"role": "user", "content": chatbot}]
-    if isinstance(chatbot, Sequence):
-        return list(chatbot)
-    return []
 
 
 def _pcm_chunks_to_arrays(
@@ -108,43 +101,24 @@ def _pcm_chunks_to_arrays(
         yield sample_rate, audio_array.reshape(1, -1)
 
 
-# See "Talk to Claude" in Cookbook for an example of how to keep
-# track of the chat history.
-def _chatbot_to_messages(chatbot: ChatHistory) -> list[ChatMessageDict]:
-    """Convert Gradio Chatbot history into OpenAI-style chat messages."""
-
-    messages: list[ChatMessageDict] = []
-    for entry in chatbot:
-        if isinstance(entry, dict):
-            role = entry.get("role")
-            content = entry.get("content")
-            if role and content is not None:
-                messages.append({"role": role, "content": str(content)})
-        elif isinstance(entry, str):
-            # Some versions of the Chatbot component may pass bare strings.
-            messages.append({"role": "user", "content": entry})
-        elif isinstance(entry, Sequence):
-            # Tuple/list pairs (user, assistant) are the historical default.
-            if len(entry) >= 1 and entry[0]:
-                messages.append({"role": "user", "content": str(entry[0])})
-            if len(entry) >= 2 and entry[1]:
-                messages.append({"role": "assistant", "content": str(entry[1])})
-        # Ignore any other unrecognized formats silently.
-    return messages
+# Backwards compatibility for modules importing the old private helpers.
+_normalize_chat_history = normalize_chat_history
+_chatbot_to_messages = chatbot_to_messages
 
 
 def response(
     audio: AudioTuple,
-    chatbot: Optional[ChatHistory | ChatEntry] = None,
+    chatbot: ChatHistory | ChatEntry | None = None,
     event: object | None = None,
 ):
     _ = event  # ReplyOnPause provides an interaction event we don't currently use.
-    history = _normalize_chat_history(chatbot)
-    messages = _chatbot_to_messages(history)
+    history = normalize_chat_history(chatbot)
+    messages = chatbot_to_messages(history)
     overall_start = time.perf_counter()
 
     stt_start = time.perf_counter()
-    text = stt_model.stt(audio)
+    stt_client = _get_stt_client()
+    text = stt_client.stt(audio)
     stt_duration = time.perf_counter() - stt_start
     print(f"[STT] Transcription ({stt_duration:.2f}s): {text}")
     history.append({"role": "user", "content": text})
@@ -152,6 +126,7 @@ def response(
     messages.append({"role": "user", "content": text})
 
     llm_start = time.perf_counter()
+    openai_client = _get_openai_client()
     completion = openai_client.chat.completions.create(
         model=settings.openai_model,
         max_tokens=settings.openai_max_tokens,
@@ -165,6 +140,7 @@ def response(
     history.append({"role": "assistant", "content": response_text})
 
     tts_start = time.perf_counter()
+    tts_client = _get_tts_client()
     chunks = tts_client.text_to_speech.convert_as_stream(
         text=response_text,
         voice_id=settings.f5_tts_voice,

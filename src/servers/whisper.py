@@ -5,7 +5,8 @@ import base64
 import binascii
 import io
 import os
-from typing import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 
 import numpy as np
 from fastapi import FastAPI, HTTPException
@@ -40,16 +41,27 @@ def create_app(
 ) -> FastAPI:
     """Create a FastAPI app that serves Whisper transcriptions."""
 
-    app = FastAPI(title="Local Whisper Server", version="1.0.0")
-
-    @app.on_event("startup")
-    async def _load_model() -> None:  # pragma: no cover - simple startup hook
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         loader = model_loader or _default_model_loader
         app.state.model = loader()
         factory = transcriber_factory or _default_transcriber_factory
         app.state.transcribe = factory(app.state.model)
         app.state.target_sample_rate = _target_sample_rate()
         app.state.fallback_language = _fallback_language()
+        try:
+            yield
+        finally:
+            transcribe = getattr(app.state, "transcribe", None)
+            closer = getattr(transcribe, "close", None)
+            if callable(closer):
+                closer()
+            model = getattr(app.state, "model", None)
+            closer = getattr(model, "close", None)
+            if callable(closer):
+                closer()
+
+    app = FastAPI(title="Local Whisper Server", version="1.0.0", lifespan=lifespan)
 
     @app.get("/healthz")
     async def _health() -> dict[str, str]:
