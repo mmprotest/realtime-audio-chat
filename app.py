@@ -10,6 +10,7 @@ from fastrtc import (
     Stream,
     get_twilio_turn_credentials,
 )
+from fastrtc.tracks import WebRTCData
 from fastrtc_whisper_cpp import get_stt_model
 from gradio.utils import get_space
 import numpy as np
@@ -55,10 +56,34 @@ def _should_flush(sentence_buffer: str) -> bool:
 # See "Talk to Claude" in Cookbook for an example of how to keep
 # track of the chat history.
 def response(
-    audio: tuple[int, NDArray[np.int16 | np.float32]],
-    chatbot: list[dict] | None = None,
+    audio: tuple[int, NDArray[np.int16 | np.float32]] | WebRTCData,
+    maybe_session_or_chatbot: str | list[dict] | None = None,
+    maybe_chatbot: list[dict] | None = None,
 ):
+    session_id: str | None = None
+    audio_payload: tuple[int, NDArray[np.int16 | np.float32]] | None
+    if isinstance(audio, WebRTCData):
+        session_id = audio.webrtc_id
+        audio_payload = audio.audio
+    else:
+        audio_payload = audio
+
+    if audio_payload is None:
+        raise ValueError("Missing audio payload in response handler")
+
+    chatbot: list[dict]
+    if isinstance(maybe_session_or_chatbot, list) and maybe_chatbot is None:
+        chatbot = maybe_session_or_chatbot
+    else:
+        chatbot = maybe_chatbot or []
+        if isinstance(maybe_session_or_chatbot, list):
+            chatbot = maybe_session_or_chatbot
+
+    _ = session_id  # session identifier reserved for future use
+
     chatbot = chatbot or []
+
+    audio = audio_payload
     messages = [{"role": d["role"], "content": d["content"]} for d in chatbot]
     start = time.time()
     text = stt_model.stt(audio)
