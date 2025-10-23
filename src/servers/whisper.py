@@ -26,6 +26,19 @@ class TranscribeRequest(BaseModel):
     sample_rate: int | None = None
     language: str | None = None
 
+    @classmethod
+    def normalise_language(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        stripped = value.strip()
+        return stripped or None
+
+    # Pydantic v1 model hook (kept simple for compatibility with pydantic<1.10)
+    def __init__(self, **data):  # type: ignore[override]
+        if "language" in data:
+            data = {**data, "language": self.normalise_language(data.get("language"))}
+        super().__init__(**data)
+
 
 class TranscribeResponse(BaseModel):
     """Response payload containing the recognized text."""
@@ -86,11 +99,12 @@ def create_app(
 
         transcribe = app.state.transcribe  # type: ignore[attr-defined]
         fallback_language = app.state.fallback_language  # type: ignore[attr-defined]
+        language = request.language
         try:
-            text = transcribe(resampled, request.language)
+            text = transcribe(resampled, language)
         except ValueError as exc:
             if (
-                request.language is None
+                language is None
                 and _language_detection_failed(exc)
                 and fallback_language
             ):
@@ -101,15 +115,21 @@ def create_app(
                         status_code=422,
                         detail="Language detection failed; specify the language parameter",
                     ) from fallback_exc
-            elif request.language is None and _language_detection_failed(exc):
+            elif language is None and _language_detection_failed(exc):
                 raise HTTPException(
                     status_code=422,
                     detail="Language detection failed; specify the language parameter",
                 ) from exc
             else:
                 raise
+        cleaned_text = text.strip()
+        if not cleaned_text and language is None and fallback_language:
+            cleaned_text = transcribe(resampled, fallback_language).strip()
+
+        if not cleaned_text:
+            raise HTTPException(status_code=422, detail="Transcription produced no text")
         duration = len(resampled) / float(target_rate)
-        return TranscribeResponse(text=text, duration=duration)
+        return TranscribeResponse(text=cleaned_text, duration=duration)
 
     return app
 
@@ -139,9 +159,25 @@ def _default_transcriber_factory(model: object) -> Transcriber:
         raise TypeError("Expected model to be an instance of faster_whisper.WhisperModel")
 
     def _transcribe(audio: AudioArray, language: str | None) -> str:
-        segments, _ = model.transcribe(audio, language=language)
-        texts = [segment.text.strip() for segment in segments if segment.text.strip()]
-        return " ".join(texts)
+        segments_iter, _ = model.transcribe(audio, language=language)
+        segments = list(segments_iter)
+        cleaned: list[str] = []
+        for segment in segments:
+            text = getattr(segment, "text", "")
+            if not isinstance(text, str):
+                continue
+            normalised = _normalise_segment_text(text)
+            if normalised:
+                cleaned.append(normalised)
+        if cleaned:
+            return " ".join(cleaned)
+
+        fallback = " ".join(
+            text.strip()
+            for text in (getattr(segment, "text", "") for segment in segments)
+            if isinstance(text, str) and text.strip()
+        )
+        return fallback
 
     return _transcribe
 
@@ -191,6 +227,11 @@ def _fallback_language() -> str | None:
 def _language_detection_failed(error: ValueError) -> bool:
     message = str(error).lower()
     return "max()" in message and "empty" in message
+
+
+def _normalise_segment_text(text: str) -> str:
+    cleaned = text.replace("▁", " ")
+    return " ".join(cleaned.split())
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI convenience
