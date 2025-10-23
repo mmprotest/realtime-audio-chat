@@ -1,0 +1,6 @@
+gradio
+dotenv
+fastrtc
+fastrtc_whisper_cpp
+numpy
+openai

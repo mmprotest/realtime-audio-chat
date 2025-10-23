@@ -28,7 +28,7 @@ openai_client = OpenAI(
 stt_model = get_stt_model()
 
 f5_tts_model = F5TTSModel(
-    ref_wav=os.getenv("F5_REFERENCE_WAV", "reference.wav"),
+    ref_wav=os.getenv("F5_REFERENCE_WAV", "reference.mp3"),
     ref_text=os.getenv("F5_REFERENCE_TEXT"),
     model_name=os.getenv("F5_MODEL_NAME"),
     target_sample_rate=(
