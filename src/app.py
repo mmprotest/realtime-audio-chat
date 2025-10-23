@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastrtc import AdditionalOutputs, ReplyOnPause, Stream, get_twilio_turn_credentials
 from gradio.utils import get_space
+import httpx
 from openai import OpenAI
 from numpy.typing import NDArray
 
@@ -25,7 +26,26 @@ if settings.openai_base_url:
     _openai_client_kwargs["base_url"] = settings.openai_base_url
 if settings.openai_api_key:
     _openai_client_kwargs["api_key"] = settings.openai_api_key
-openai_client = OpenAI(**_openai_client_kwargs)
+
+
+def _create_openai_client() -> OpenAI:
+    """Instantiate an OpenAI client resilient to incompatible httpx versions."""
+
+    try:
+        return OpenAI(**_openai_client_kwargs)
+    except TypeError as exc:  # pragma: no cover - defensive guard for Windows envs
+        if "proxies" not in str(exc):
+            raise
+        # Some installations ship a version of httpx that expects the newer
+        # ``proxy=`` keyword instead of ``proxies=``.  In that case we bypass the
+        # default client construction (which forwards the incompatible argument)
+        # and build an httpx client ourselves. ``trust_env=True`` ensures that
+        # any proxy configuration from the host environment is still honoured.
+        http_client = httpx.Client(trust_env=True)
+        return OpenAI(http_client=http_client, **_openai_client_kwargs)
+
+
+openai_client = _create_openai_client()
 tts_client = F5LocalTTS(
     base_url=settings.f5_tts_url,
     voice_id=settings.f5_tts_voice,
