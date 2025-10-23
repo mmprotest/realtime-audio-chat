@@ -11,7 +11,9 @@ np = pytest.importorskip("numpy")
 
 from fastapi.testclient import TestClient
 
-from src.servers.whisper import create_app
+from types import SimpleNamespace
+
+from src.servers.whisper import create_app, _default_transcriber_factory
 
 
 def _wav_bytes(samples: np.ndarray, sample_rate: int) -> bytes:
@@ -117,3 +119,40 @@ def test_transcribe_surfaces_language_detection_failure(monkeypatch):
 
     assert response.status_code == 422
     assert response.json()["detail"] == "Language detection failed; specify the language parameter"
+
+
+def test_transcribe_rejects_empty_transcription():
+    def factory(model: object):
+        def _transcribe(audio: np.ndarray, language: str | None) -> str:
+            return "  "
+
+        return _transcribe
+
+    app = create_app(model_loader=lambda: object(), transcriber_factory=factory)
+    audio = (np.sin(np.linspace(0, 1, 16000) * 2 * np.pi * 220) * 0.5 * 32767).astype(np.int16)
+    payload = {"audio": base64.b64encode(_wav_bytes(audio, 16000)).decode("ascii")}
+
+    with TestClient(app) as client:
+        response = client.post("/transcribe", json=payload)
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == "Transcription produced no text"
+
+
+def test_default_transcriber_factory_normalises_segments(monkeypatch):
+    faster_whisper = pytest.importorskip("faster_whisper")
+
+    class DummyModel:
+        def transcribe(self, audio: np.ndarray, language: str | None = None):
+            return iter(
+                [
+                    SimpleNamespace(text="▁Hello"),
+                    SimpleNamespace(text="  world  "),
+                    SimpleNamespace(text=""),
+                ]
+            ), None
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", DummyModel)
+    transcriber = _default_transcriber_factory(DummyModel())
+    result = transcriber(np.zeros(10, dtype=np.float32), "en")
+    assert result == "Hello world"

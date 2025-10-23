@@ -127,15 +127,23 @@ def _default_model_loader() -> F5Model:
 
     try:
         from f5_tts.api import F5TTS  # type: ignore[import-not-found]
-
-        _ensure_ffmpeg()
-
-        model_name = os.getenv("F5_TTS_MODEL", "F5TTS_v1_Base")
-        device = os.getenv("F5_TTS_DEVICE")
-        kwargs = {"device": device} if device else {}
-        return F5TTS(model=model_name, **kwargs)
     except ModuleNotFoundError:
         return _SimpleF5Model()
+
+    _ensure_ffmpeg()
+
+    model_name = os.getenv("F5_TTS_MODEL", "F5TTS_v1_Base")
+    device = os.getenv("F5_TTS_DEVICE")
+    kwargs = {"device": device} if device else {}
+
+    try:
+        return F5TTS(model=model_name, **kwargs)
+    except ModuleNotFoundError as exc:
+        missing = getattr(exc, "name", "") or ""
+        message = str(exc)
+        if missing.startswith("torchcodec") or "torchcodec" in message:
+            return _SimpleF5Model()
+        raise
 
 
 def _load_default_voices() -> VoiceMap:

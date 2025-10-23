@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import io
+import sys
 import wave
+from types import ModuleType
 
 import pytest
 
@@ -10,7 +12,7 @@ np = pytest.importorskip("numpy")
 
 from fastapi.testclient import TestClient
 
-from src.servers.f5 import VoiceConfig, create_app
+from src.servers.f5 import VoiceConfig, _SimpleF5Model, _default_model_loader, create_app
 
 
 class StubF5Model:
@@ -105,3 +107,21 @@ def test_voices_endpoint_lists_config(tmp_path, voice_files):
     payload = response.json()
     assert payload["default"] == "demo"
     assert "demo" in payload["voices"]
+
+
+def test_default_model_loader_falls_back_when_torchcodec_missing(monkeypatch):
+    module = ModuleType("f5_tts")
+    api_module = ModuleType("f5_tts.api")
+
+    class DummyF5:
+        def __init__(self, *args, **kwargs):
+            raise ModuleNotFoundError("No module named 'torchcodec'")
+
+    api_module.F5TTS = DummyF5
+    module.api = api_module
+    monkeypatch.setitem(sys.modules, "f5_tts", module)
+    monkeypatch.setitem(sys.modules, "f5_tts.api", api_module)
+    monkeypatch.setattr("src.servers.f5._ensure_ffmpeg", lambda: None)
+
+    model = _default_model_loader()
+    assert isinstance(model, _SimpleF5Model)

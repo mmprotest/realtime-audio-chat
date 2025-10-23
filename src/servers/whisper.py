@@ -108,6 +108,8 @@ def create_app(
                 ) from exc
             else:
                 raise
+        if not text.strip():
+            raise HTTPException(status_code=422, detail="Transcription produced no text")
         duration = len(resampled) / float(target_rate)
         return TranscribeResponse(text=text, duration=duration)
 
@@ -139,9 +141,25 @@ def _default_transcriber_factory(model: object) -> Transcriber:
         raise TypeError("Expected model to be an instance of faster_whisper.WhisperModel")
 
     def _transcribe(audio: AudioArray, language: str | None) -> str:
-        segments, _ = model.transcribe(audio, language=language)
-        texts = [segment.text.strip() for segment in segments if segment.text.strip()]
-        return " ".join(texts)
+        segments_iter, _ = model.transcribe(audio, language=language)
+        segments = list(segments_iter)
+        cleaned: list[str] = []
+        for segment in segments:
+            text = getattr(segment, "text", "")
+            if not isinstance(text, str):
+                continue
+            normalised = _normalise_segment_text(text)
+            if normalised:
+                cleaned.append(normalised)
+        if cleaned:
+            return " ".join(cleaned)
+
+        fallback = " ".join(
+            text.strip()
+            for text in (getattr(segment, "text", "") for segment in segments)
+            if isinstance(text, str) and text.strip()
+        )
+        return fallback
 
     return _transcribe
 
@@ -191,6 +209,11 @@ def _fallback_language() -> str | None:
 def _language_detection_failed(error: ValueError) -> bool:
     message = str(error).lower()
     return "max()" in message and "empty" in message
+
+
+def _normalise_segment_text(text: str) -> str:
+    cleaned = text.replace("▁", " ")
+    return " ".join(cleaned.split())
 
 
 if __name__ == "__main__":  # pragma: no cover - CLI convenience
