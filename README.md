@@ -32,7 +32,7 @@ The Windows automation script installs CUDA-enabled PyTorch wheels that are forw
 
 ## Quick Start (Windows + CUDA)
 
-1. **Open an elevated PowerShell window.** Search for PowerShell, right-click, and choose “Run as administrator.”
+1. **Open PowerShell.** You can start from a standard session; the setup script will prompt for elevation if required.
 2. **Clone this repository** and move into the project directory:
    ```powershell
    git clone https://github.com/your-org/realtime-audio-chat.git
@@ -44,7 +44,7 @@ The Windows automation script installs CUDA-enabled PyTorch wheels that are forw
    .\scripts\setup_windows.ps1
    ```
    The script will:
-   - confirm administrative privileges and check for CUDA 13.0 via `nvcc`
+   - elevate automatically when administrative privileges are required and check for CUDA 13.0 via `nvcc`
    - install Python 3.10.11, the MSVC runtime, and FFmpeg by downloading their official installers when missing
    - create `.venv` and install CUDA-enabled PyTorch + Python dependencies
    - run `pip check` to validate the environment

@@ -49,7 +49,41 @@ function Assert-Administrator {
     $currentIdentity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($currentIdentity)
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-        throw "This script must be run from an elevated PowerShell session."
+        Write-Warning "Administrative privileges are required. Requesting elevation..."
+
+        try {
+            $argumentList = New-Object System.Collections.Generic.List[string]
+            $argumentList.Add("-NoProfile") | Out-Null
+            $argumentList.Add("-ExecutionPolicy") | Out-Null
+            $argumentList.Add("Bypass") | Out-Null
+            $argumentList.Add("-File") | Out-Null
+            $argumentList.Add($PSCommandPath) | Out-Null
+
+            foreach ($entry in $PSBoundParameters.GetEnumerator()) {
+                if ($null -ne $entry.Value -and $entry.Value -ne "") {
+                    $argumentList.Add("-{0}" -f $entry.Key) | Out-Null
+                    $argumentList.Add([string]$entry.Value) | Out-Null
+                }
+            }
+
+            $startInfo = @{
+                FilePath        = "powershell.exe"
+                ArgumentList    = $argumentList
+                Verb            = "RunAs"
+                WorkingDirectory = (Get-Location).Path
+                PassThru        = $true
+                Wait            = $true
+            }
+
+            $process = Start-Process @startInfo
+            if ($process -and $process.HasExited) {
+                exit $process.ExitCode
+            } else {
+                exit
+            }
+        } catch {
+            throw "Administrative privileges are required. Please rerun this script from an elevated PowerShell session."
+        }
     }
 }
 
