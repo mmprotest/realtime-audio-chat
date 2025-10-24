@@ -45,7 +45,7 @@ The Windows automation script installs CUDA-enabled PyTorch wheels that are forw
    ```
    The script will:
    - confirm administrative privileges and check for CUDA 13.0 via `nvcc`
-   - install Python 3.10, the MSVC runtime, and FFmpeg with `winget` (if missing)
+   - install Python 3.10.11, the MSVC runtime, and FFmpeg by downloading their official installers when missing
    - create `.venv` and install CUDA-enabled PyTorch + Python dependencies
    - run `pip check` to validate the environment
 4. **Activate the virtual environment:**
@@ -66,7 +66,7 @@ The PowerShell script exposes a handful of parameters should you need to customi
 .\scripts\setup_windows.ps1 -PythonVersion 3.11 -VenvDir .\.venv-311
 ```
 
-- `-PythonVersion` (default `3.10`) must match an interpreter available from the Windows Store `winget` feed.
+- `-PythonVersion` (default `3.10.11`) downloads the specified CPython release (major.minor.patch) directly from python.org.
 - `-CudaVersion` (default `13.0`) is used for validation only and will emit a warning if the detected toolkit differs.
 - `-VenvDir` controls where the virtual environment is created.
 
