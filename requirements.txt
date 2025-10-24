@@ -2,7 +2,7 @@ gradio
 python-dotenv==1.0.1
 fastrtc==0.0.33
 fastrtc-whisper-cpp==0.1.2
-numpy>=2.0.2,<2.2
+numpy>=1.26.4,<2
 openai==1.40.2
 huggingface_hub==0.26.5
 resampy==0.4.3
@@ -17,3 +17,4 @@ einops==0.7.0
 natsort==8.4.0
 soundfile==0.13.1
 tiktoken==0.8.0
+flatten-dict==0.4.2
