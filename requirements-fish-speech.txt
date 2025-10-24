@@ -1,0 +1,4 @@
+# Install Fish-Speech and its Descript audio tooling without pulling in their conflicting dependency pins.
+# Use: pip install --no-deps -r requirements-fish-speech.txt
+fish-speech @ git+https://github.com/fishaudio/fish-speech.git
+descript-audiotools==0.7.2
