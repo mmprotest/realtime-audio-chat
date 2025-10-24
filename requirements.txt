@@ -2,6 +2,7 @@ gradio
 python-dotenv==1.0.1
 fastrtc==0.0.33
 numpy>=1.26.4,<2
+pydantic==2.9.2
 openai==1.40.2
 huggingface_hub==0.26.5
 resampy==0.4.3

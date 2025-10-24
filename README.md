@@ -17,7 +17,8 @@ app.py                       # FastAPI + Gradio entrypoint and FastRTC stream ha
 fish_speech_adapter.py       # Fish-Speech OpenAudio S1 Mini adapter for FastRTC
 whisper_stt_adapter.py       # Local Whisper.cpp speech-to-text helper
 requirements.txt             # Core Python dependencies for the application runtime
-requirements-fish-speech.txt # Fish-Speech package (install with --no-deps)
+requirements-fish-speech-deps.txt # Curated Fish-Speech runtime dependencies
+requirements-fish-speech.txt     # Fish-Speech package (install with --no-deps)
 scripts/
   setup_windows.ps1          # Turnkey Windows PowerShell bootstrap script (CUDA-enabled)
 ```
@@ -56,8 +57,9 @@ Follow every step in order. Do not skip the verification prompts.
    - download Python 3.10.14 from python.org if it is missing and install it silently
    - install the Microsoft Visual C++ runtime and FFmpeg if they are absent
    - create a virtual environment at `.venv` and upgrade `pip`, `setuptools`, and `wheel`
-   - install the CUDA-enabled PyTorch wheels and the pinned runtime packages from `requirements.txt` (including `numpy<2` which torchaudio requires and `pywhispercpp` for speech-to-text)
-   - install the Fish-Speech package from `requirements-fish-speech.txt` using `--no-deps`
+  - install the CUDA-enabled PyTorch wheels and the pinned runtime packages from `requirements.txt` (including `numpy<2` which torchaudio requires and `pywhispercpp` for speech-to-text)
+  - install the curated Fish-Speech dependency set from `requirements-fish-speech-deps.txt`
+  - install the Fish-Speech package from `requirements-fish-speech.txt` using `--no-deps`
    - print the exact command to activate the environment when it finishes
 5. **Verify that Python works inside the virtual environment.** When the script finishes, follow its final prompt (normally `.\.venv\Scripts\Activate.ps1`). After activation, run:
    ```powershell
@@ -99,11 +101,12 @@ python app.py
    ```bash
    python -m pip install --upgrade pip setuptools wheel
    ```
-4. **Install the core requirements and Fish-Speech package.** This step pins `numpy<2` (torchaudio currently breaks on NumPy 2.x) and adds helper libraries that Fish-Speech expects such as `flatten-dict`.
-   ```bash
-   pip install -r requirements.txt
-   pip install --no-deps -r requirements-fish-speech.txt
-   ```
+4. **Install the core requirements and Fish-Speech package.** This step pins `numpy<2` (torchaudio currently breaks on NumPy 2.x) and layers the curated Fish-Speech dependency set before installing the upstream packages with `--no-deps`.
+  ```bash
+  pip install -r requirements.txt
+  pip install -r requirements-fish-speech-deps.txt
+  pip install --no-deps -r requirements-fish-speech.txt
+  ```
 5. **Install a compatible PyTorch build.** Visit <https://pytorch.org/get-started/locally/> and copy the command that matches your platform (CUDA or CPU). Run it inside the virtual environment.
 6. **Launch the app to download model weights.**
    ```bash
@@ -156,7 +159,7 @@ python app.py
 - **The setup script stops with a 404 when downloading Python.** Ensure the machine has internet access. If python.org is blocked, pass a specific version that you know exists, for example `-PythonVersion 3.10.13`.
 - **`nvcc` was not found.** Install the CUDA 13 toolkit from [NVIDIA](https://developer.nvidia.com/cuda-downloads) and reboot so the PATH updates.
 - **Packages fail to build wheels on Windows.** Verify that the Microsoft Visual C++ Redistributable installed correctly. Re-run the script; it will re-download the installer if needed.
-- **`pip` reports conflicts when installing Fish-Speech.** Make sure you ran the `pip install --no-deps -r requirements-fish-speech.txt` command exactly. The `--no-deps` flag prevents incompatible versions from being pulled automatically.
+- **`pip` reports conflicts when installing Fish-Speech.** Install the curated dependency set first (`pip install -r requirements-fish-speech-deps.txt`), then run `pip install --no-deps -r requirements-fish-speech.txt`. The curated list satisfies Fish-Speech without allowing upstream packages to upgrade NumPy.
 - **You see "A module compiled against NumPy 1.x cannot be run in NumPy 2.1" when launching the app.** Something upgraded NumPy after setup. Inside the virtual environment run `pip install "numpy<2" --force-reinstall` to roll back to a compatible version, then restart the app.
 - **The app keeps re-downloading Fish-Speech checkpoints.** Set `FISH_SPEECH_CHECKPOINT_DIR` to a location that persists between runs, such as `C:\Models\fish-speech`, and run the app once to populate it.
 - **You do not hear audio in the browser.** Confirm that your system default playback device is working and that your browser allows autoplay for the local site. Chrome/Edge will prompt in the address bar the first time audio plays.

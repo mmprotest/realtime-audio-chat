@@ -468,11 +468,10 @@ $repoRoot = (Get-Location).Path
 $requirementsPath = Join-Path $repoRoot "requirements.txt"
 Invoke-Pip -PythonExe $venvPython -Arguments @("install", "-r", $requirementsPath)
 
-Write-Section "Validating base installation"
-try {
-    Invoke-Pip -PythonExe $venvPython -Arguments @("check")
-} catch {
-    Write-Warning "Base dependency validation reported issues: $($_.Exception.Message)"
+$fishDepsPath = Join-Path $repoRoot "requirements-fish-speech-deps.txt"
+if (Test-Path $fishDepsPath) {
+    Write-Section "Installing Fish-Speech curated dependency set"
+    Invoke-Pip -PythonExe $venvPython -Arguments @("install", "-r", $fishDepsPath)
 }
 
 $fishRequirementsPath = Join-Path $repoRoot "requirements-fish-speech.txt"
@@ -480,6 +479,13 @@ if (Test-Path $fishRequirementsPath) {
     Write-Section "Installing Fish-Speech runtime (ignoring upstream dependency pins)"
     Invoke-Pip -PythonExe $venvPython -Arguments @("install", "--no-deps", "-r", $fishRequirementsPath)
     Write-Warning "Fish-Speech is installed without its declared dependency constraints. Upstream metadata currently conflicts with FastRTC's requirements (e.g. numpy/gradio versions)."
+}
+
+Write-Section "Validating installation"
+try {
+    Invoke-Pip -PythonExe $venvPython -Arguments @("check")
+} catch {
+    Write-Warning "Dependency validation reported issues: $($_.Exception.Message)"
 }
 
 Write-Section "Setup complete"
