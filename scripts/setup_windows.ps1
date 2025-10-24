@@ -18,7 +18,7 @@
 
 .PARAMETER PythonVersion
     Full Python version (major.minor.patch) to install and target for the virtual environment.
-    The default (3.10.11) is compatible with all project dependencies.
+    The default (3.10.14) is compatible with all project dependencies.
 
 .PARAMETER CudaVersion
     CUDA toolkit version expected to be available on the host. Defaults to 13.0.
@@ -32,7 +32,7 @@
     official distribution points, so an active internet connection is necessary.
 #>
 param(
-    [string]$PythonVersion = "3.10.11",
+    [string]$PythonVersion = "3.10.14",
     [string]$CudaVersion = "13.0",
     [string]$VenvDir = ".venv"
 )
@@ -132,11 +132,78 @@ function Add-ToSystemPath {
     $env:Path = "$Directory;" + $env:Path
 }
 
-function Install-Python {
-    param([string]$Version)
+function Test-UriAvailable {
+    param([string]$Uri)
 
-    $installerUrl = "https://www.python.org/ftp/python/$Version/python-$Version-amd64.exe"
-    $installerPath = Download-File -Uri $installerUrl -Description "Python $Version installer"
+    try {
+        $response = Invoke-WebRequest -Uri $Uri -Method Head -UseBasicParsing -MaximumRedirection 0 -ErrorAction Stop
+        return $response.StatusCode -ge 200 -and $response.StatusCode -lt 400
+    } catch [System.Net.WebException] {
+        $webResponse = $_.Exception.Response
+        if ($webResponse -and $webResponse.StatusCode) {
+            $status = [int]$webResponse.StatusCode
+            if ($status -eq 404) {
+                return $false
+            }
+        }
+        throw
+    }
+}
+
+function Get-LatestPythonPatchVersion {
+    param([string]$MajorMinor)
+
+    $indexUri = "https://www.python.org/ftp/python/$MajorMinor/"
+    try {
+        $response = Invoke-WebRequest -Uri $indexUri -UseBasicParsing -ErrorAction Stop
+    } catch {
+        throw "Unable to query available Python releases for $MajorMinor from $indexUri"
+    }
+
+    $pattern = "python-$MajorMinor\.([0-9]+)-amd64\.exe"
+    $matches = [regex]::Matches($response.Content, $pattern)
+    if ($matches.Count -eq 0) {
+        throw "No patch releases were found for Python $MajorMinor on python.org"
+    }
+
+    $latestPatch = ($matches | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Descending | Select-Object -First 1)
+    return "{0}.{1}" -f $MajorMinor, $latestPatch
+}
+
+function Resolve-PythonInstaller {
+    param([string]$RequestedVersion)
+
+    $candidateUri = "https://www.python.org/ftp/python/$RequestedVersion/python-$RequestedVersion-amd64.exe"
+    if (Test-UriAvailable -Uri $candidateUri) {
+        return [PSCustomObject]@{
+            Version = $RequestedVersion
+            Uri     = $candidateUri
+        }
+    }
+
+    $majorMinor = Get-MajorMinorVersionString -Version $RequestedVersion
+    $fallbackVersion = Get-LatestPythonPatchVersion -MajorMinor $majorMinor
+    $fallbackUri = "https://www.python.org/ftp/python/$fallbackVersion/python-$fallbackVersion-amd64.exe"
+
+    if (-not (Test-UriAvailable -Uri $fallbackUri)) {
+        throw "Unable to locate a downloadable Python installer for version $RequestedVersion or fallback $fallbackVersion"
+    }
+
+    Write-Warning "Python $RequestedVersion installer was not found. Falling back to latest $majorMinor patch release ($fallbackVersion)."
+
+    return [PSCustomObject]@{
+        Version = $fallbackVersion
+        Uri     = $fallbackUri
+    }
+}
+
+function Install-Python {
+    param(
+        [string]$Version,
+        [string]$InstallerUri
+    )
+
+    $installerPath = Download-File -Uri $InstallerUri -Description "Python $Version installer"
 
     try {
         Write-Section "Installing Python $Version"
@@ -165,24 +232,42 @@ function Get-CudaVersion {
 }
 
 function Resolve-PythonExecutable {
-    param([string]$Version)
+    param(
+        [string]$Version,
+        [switch]$AllowPatchMismatch
+    )
 
     $majorMinor = Get-MajorMinorVersionString -Version $Version
+
+    $candidates = @()
 
     $pyLauncher = Get-Command py -ErrorAction SilentlyContinue
     if ($pyLauncher) {
         $pyResult = & $pyLauncher.Source -$majorMinor -c "import sys; print(sys.executable)" 2>$null
         if ($LASTEXITCODE -eq 0 -and $pyResult) {
-            return $pyResult.Trim()
+            $candidates += $pyResult.Trim()
         }
     }
 
     $pythonCmd = Get-Command python -ErrorAction SilentlyContinue
     if ($pythonCmd) {
-        $versionCheck = & $pythonCmd.Source -c "import sys; import platform; print(platform.python_version())" 2>$null
-        if ($LASTEXITCODE -eq 0 -and $versionCheck) {
-            if ($versionCheck.Trim().StartsWith($majorMinor)) {
-                return $pythonCmd.Source
+        $candidates += $pythonCmd.Source
+    }
+
+    foreach ($candidate in $candidates | Select-Object -Unique) {
+        if (-not (Test-Path $candidate)) {
+            continue
+        }
+
+        $detectedVersion = Get-PythonVersionString -PythonExe $candidate
+        if (-not $detectedVersion) {
+            continue
+        }
+
+        if ($detectedVersion -eq $Version -or ($AllowPatchMismatch -and $detectedVersion.StartsWith("$majorMinor."))) {
+            return [PSCustomObject]@{
+                Path    = $candidate
+                Version = $detectedVersion
             }
         }
     }
@@ -203,28 +288,31 @@ function Get-PythonVersionString {
 function Ensure-Python {
     param([string]$Version)
 
-    $pythonExe = Resolve-PythonExecutable -Version $Version
-    if ($pythonExe) {
-        $detectedVersion = Get-PythonVersionString -PythonExe $pythonExe
-        if ($detectedVersion -eq $Version) {
-            Write-Host "Found Python $detectedVersion at $pythonExe" -ForegroundColor Green
-            return $pythonExe
+    $existing = Resolve-PythonExecutable -Version $Version -AllowPatchMismatch
+    if ($existing) {
+        if ($existing.Version -eq $Version) {
+            Write-Host "Found Python $($existing.Version) at $($existing.Path)" -ForegroundColor Green
+            return $existing.Path
         }
 
-        Write-Warning "Python $detectedVersion is installed at $pythonExe, but version $Version was requested. Installing the requested version."
+        Write-Warning "Python $($existing.Version) is installed at $($existing.Path), which satisfies the requested $Version major/minor version. Using the existing interpreter."
+        return $existing.Path
     }
 
-    Install-Python -Version $Version
-    $pythonExe = Resolve-PythonExecutable -Version $Version
-    if (-not $pythonExe) {
-        throw "Python $Version installation was requested but the interpreter could not be located."
+    $installerInfo = Resolve-PythonInstaller -RequestedVersion $Version
+    Install-Python -Version $installerInfo.Version -InstallerUri $installerInfo.Uri
+
+    $postInstall = Resolve-PythonExecutable -Version $installerInfo.Version
+    if (-not $postInstall) {
+        throw "Python $($installerInfo.Version) installation was requested but the interpreter could not be located."
     }
-    $detectedVersion = Get-PythonVersionString -PythonExe $pythonExe
-    if ($detectedVersion -ne $Version) {
-        throw "Python $Version installation verification failed (detected $detectedVersion)."
+
+    if ($postInstall.Version -ne $installerInfo.Version) {
+        throw "Python $($installerInfo.Version) installation verification failed (detected $($postInstall.Version))."
     }
-    Write-Host "Installed Python $detectedVersion at $pythonExe" -ForegroundColor Green
-    return $pythonExe
+
+    Write-Host "Installed Python $($postInstall.Version) at $($postInstall.Path)" -ForegroundColor Green
+    return $postInstall.Path
 }
 
 function Test-VCRedistributableInstalled {
@@ -367,13 +455,38 @@ $torchPackages = @(
     "torchaudio==2.3.1+cu121",
     "torchvision==0.18.1+cu121"
 )
-Invoke-Pip -PythonExe $venvPython -Arguments @("install", "--index-url", $torchIndex, "--extra-index-url", "https://pypi.org/simple") + $torchPackages
+$torchArgs = @(
+    "install",
+    "--index-url", $torchIndex,
+    "--extra-index-url", "https://pypi.org/simple"
+)
+$torchArgs += $torchPackages
+Invoke-Pip -PythonExe $venvPython -Arguments $torchArgs
 
 Write-Section "Installing project requirements"
-Invoke-Pip -PythonExe $venvPython -Arguments @("install", "-r", (Join-Path ((Get-Location).Path) "requirements.txt"))
+$repoRoot = (Get-Location).Path
+$requirementsPath = Join-Path $repoRoot "requirements.txt"
+Invoke-Pip -PythonExe $venvPython -Arguments @("install", "-r", $requirementsPath)
+
+$fishDepsPath = Join-Path $repoRoot "requirements-fish-speech-deps.txt"
+if (Test-Path $fishDepsPath) {
+    Write-Section "Installing Fish-Speech curated dependency set"
+    Invoke-Pip -PythonExe $venvPython -Arguments @("install", "-r", $fishDepsPath)
+}
+
+$fishRequirementsPath = Join-Path $repoRoot "requirements-fish-speech.txt"
+if (Test-Path $fishRequirementsPath) {
+    Write-Section "Installing Fish-Speech runtime (ignoring upstream dependency pins)"
+    Invoke-Pip -PythonExe $venvPython -Arguments @("install", "--no-deps", "-r", $fishRequirementsPath)
+    Write-Warning "Fish-Speech is installed without its declared dependency constraints. Upstream metadata currently conflicts with FastRTC's requirements (e.g. numpy/gradio versions)."
+}
 
 Write-Section "Validating installation"
-Invoke-Pip -PythonExe $venvPython -Arguments @("check")
+try {
+    Invoke-Pip -PythonExe $venvPython -Arguments @("check")
+} catch {
+    Write-Warning "Dependency validation reported issues: $($_.Exception.Message)"
+}
 
 Write-Section "Setup complete"
 Write-Host "Activate the environment with:`n    $((Resolve-Path $VenvDir).Path)\\Scripts\\Activate.ps1" -ForegroundColor Green

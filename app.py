@@ -11,13 +11,13 @@ from fastrtc import (
     get_twilio_turn_credentials,
 )
 from fastrtc.tracks import WebRTCData
-from fastrtc_whisper_cpp import get_stt_model
 from gradio.utils import get_space
 import numpy as np
 from numpy.typing import NDArray
 from openai import OpenAI
 
-from f5_adapter import F5TTSModel
+from fish_speech_adapter import FishSpeechTTSModel
+from whisper_stt_adapter import get_stt_model
 
 load_dotenv()
 
@@ -28,10 +28,60 @@ openai_client = OpenAI(
 
 stt_model = get_stt_model()
 
-f5_tts_model = F5TTSModel(
+def _parse_bool(value: str | None, default: bool) -> bool:
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _parse_optional_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
+def _build_inference_kwargs() -> dict[str, object]:
+    kwargs: dict[str, object] = {}
+    if chunk_length := _parse_optional_int(os.getenv("FISH_SPEECH_CHUNK_LENGTH")):
+        kwargs["chunk_length"] = chunk_length
+    if max_tokens := _parse_optional_int(os.getenv("FISH_SPEECH_MAX_NEW_TOKENS")):
+        kwargs["max_new_tokens"] = max_tokens
+    if top_p := os.getenv("FISH_SPEECH_TOP_P"):
+        try:
+            kwargs["top_p"] = float(top_p)
+        except ValueError:
+            pass
+    if penalty := os.getenv("FISH_SPEECH_REPETITION_PENALTY"):
+        try:
+            kwargs["repetition_penalty"] = float(penalty)
+        except ValueError:
+            pass
+    if temperature := os.getenv("FISH_SPEECH_TEMPERATURE"):
+        try:
+            kwargs["temperature"] = float(temperature)
+        except ValueError:
+            pass
+    if seed := _parse_optional_int(os.getenv("FISH_SPEECH_SEED")):
+        kwargs["seed"] = seed
+    if use_memory_cache := os.getenv("FISH_SPEECH_USE_MEMORY_CACHE"):
+        kwargs["use_memory_cache"] = use_memory_cache
+    if normalize := os.getenv("FISH_SPEECH_NORMALIZE"):
+        kwargs["normalize"] = _parse_bool(normalize, True)
+    return kwargs
+
+
+fish_tts_model = FishSpeechTTSModel(
     ref_wav=os.getenv("F5_REFERENCE_WAV", "morgan.mp3"),
     ref_text=os.getenv("F5_REFERENCE_TEXT"),
-    model_name=os.getenv("F5_MODEL_NAME"),
+    checkpoint_dir=os.getenv("FISH_SPEECH_CHECKPOINT_DIR"),
+    download=_parse_bool(os.getenv("FISH_SPEECH_AUTO_DOWNLOAD"), True),
+    device=os.getenv("FISH_SPEECH_DEVICE"),
+    precision=os.getenv("FISH_SPEECH_PRECISION"),
+    compile=_parse_bool(os.getenv("FISH_SPEECH_COMPILE"), False),
+    inference_kwargs=_build_inference_kwargs(),
     target_sample_rate=(
         int(os.getenv("F5_TARGET_SAMPLE_RATE"))
         if os.getenv("F5_TARGET_SAMPLE_RATE")
@@ -138,14 +188,14 @@ def response(
             sentence_buffer += token
             full_text += token
             if _should_flush(sentence_buffer):
-                for audio_chunk in f5_tts_model.stream_tts_sync(
+                for audio_chunk in fish_tts_model.stream_tts_sync(
                     sentence_buffer.strip()
                 ):
                     yield audio_chunk
                 sentence_buffer = ""
 
     if sentence_buffer.strip():
-        for audio_chunk in f5_tts_model.stream_tts_sync(sentence_buffer.strip()):
+        for audio_chunk in fish_tts_model.stream_tts_sync(sentence_buffer.strip()):
             yield audio_chunk
 
     response_text = " ".join(full_text.strip().split())
@@ -164,7 +214,7 @@ stream = Stream(
     rtc_configuration=get_twilio_turn_credentials() if get_space() else None,
     concurrency_limit=5 if get_space() else None,
     time_limit=90 if get_space() else None,
-    ui_args={"title": "LLM Voice Chat (Local LLM, Whisper, and F5-TTS ⚡️)"},
+    ui_args={"title": "LLM Voice Chat (Local LLM, Whisper, and Fish-Speech ⚡️)"},
 )
 
 # Mount the STREAM UI to the FastAPI app
