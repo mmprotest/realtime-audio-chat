@@ -1,30 +1,31 @@
 # Realtime Audio Chat
 
-A reference implementation of a local realtime voice assistant that combines [FastRTC](https://github.com/answerdotai/fastrtc) for low-latency audio streaming, Whisper-based speech-to-text, OpenAI-compatible text generation, and [F5-TTS](https://github.com/SWivid/F5-TTS) voice cloning for speech synthesis. The project exposes a Gradio-powered browser UI and can also proxy the experience over a phone call.
+A reference implementation of a local realtime voice assistant that combines [FastRTC](https://github.com/answerdotai/fastrtc) for low-latency audio streaming, Whisper-based speech-to-text, OpenAI-compatible text generation, and [Fish-Speech OpenAudio S1 Mini](https://huggingface.co/fishaudio/openaudio-s1-mini) voice cloning for speech synthesis. The project exposes a Gradio-powered browser UI and can also proxy the experience over a phone call.
 
 ## Features
 
 - **Bidirectional audio streaming** powered by FastRTC with optional TURN credentials for hosted deployments.
 - **Local speech-to-text** transcription via `fastrtc-whisper-cpp`.
 - **Configurable LLM backend** that targets any OpenAI-compatible API endpoint.
-- **Streaming text-to-speech** responses driven by the F5-TTS model, returning audio as sentences complete.
+- **Streaming text-to-speech** responses driven by the Fish-Speech OpenAudio S1 Mini model, returning audio as sentences complete.
 - **Gradio UI or telephony mode** based on the `MODE` environment variable.
 
 ## Repository Layout
 
 ```text
-app.py               # FastAPI + Gradio entrypoint and FastRTC stream handler
-f5_adapter.py        # Adapter that exposes F5-TTS as a FastRTC-compatible synthesizer
-requirements.txt     # Python dependencies for the application runtime
+app.py                       # FastAPI + Gradio entrypoint and FastRTC stream handler
+fish_speech_adapter.py       # Fish-Speech OpenAudio S1 Mini adapter for FastRTC
+requirements.txt             # Core Python dependencies for the application runtime
+requirements-fish-speech.txt # Fish-Speech package (install with --no-deps)
 scripts/
-  setup_windows.ps1  # Turnkey Windows PowerShell bootstrap script (CUDA-enabled)
+  setup_windows.ps1          # Turnkey Windows PowerShell bootstrap script (CUDA-enabled)
 ```
 
 ## Prerequisites
 
 | Component | Version / Notes |
 |-----------|-----------------|
-| Python    | 3.10.x (other versions are not exercised) |
+| Python    | 3.10.x (script defaults to 3.10.14) |
 | GPU       | NVIDIA GPU with CUDA 13-compatible drivers (script validates with `nvcc`) |
 | OS        | Windows 10/11 (scripted install) or Linux/macOS (manual install) |
 
@@ -45,9 +46,9 @@ The Windows automation script installs CUDA-enabled PyTorch wheels that are forw
    ```
    The script will:
    - elevate automatically when administrative privileges are required and check for CUDA 13.0 via `nvcc`
-   - install Python 3.10.11, the MSVC runtime, and FFmpeg by downloading their official installers when missing
-   - create `.venv` and install CUDA-enabled PyTorch + Python dependencies
-   - run `pip check` to validate the environment
+   - install Python 3.10.14, the MSVC runtime, and FFmpeg by downloading their official installers when missing
+   - create `.venv`, install CUDA-enabled PyTorch + the core Python dependencies, and then install the Fish-Speech package with its upstream dependency pins disabled (to avoid NumPy/Gradio conflicts)
+   - report the commands required to activate the environment and launch the app
 4. **Activate the virtual environment:**
    ```powershell
    .\.venv\Scripts\Activate.ps1
@@ -66,7 +67,7 @@ The PowerShell script exposes a handful of parameters should you need to customi
 .\scripts\setup_windows.ps1 -PythonVersion 3.11 -VenvDir .\.venv-311
 ```
 
-- `-PythonVersion` (default `3.10.11`) downloads the specified CPython release (major.minor.patch) directly from python.org.
+- `-PythonVersion` (default `3.10.14`) downloads the specified CPython release (major.minor.patch) directly from python.org.
 - `-CudaVersion` (default `13.0`) is used for validation only and will emit a warning if the detected toolkit differs.
 - `-VenvDir` controls where the virtual environment is created.
 
@@ -82,6 +83,7 @@ The PowerShell script exposes a handful of parameters should you need to customi
    ```bash
    pip install --upgrade pip setuptools wheel
    pip install -r requirements.txt
+   pip install --no-deps -r requirements-fish-speech.txt
    ```
 4. Install PyTorch manually. Choose the wheel that matches your CUDA runtime or CPU-only needs from [pytorch.org/get-started/locally](https://pytorch.org/get-started/locally/).
 5. Configure environment variables (see below) and run the application with `python app.py`.
