@@ -32,11 +32,7 @@
     official distribution points, so an active internet connection is necessary.
 #>
 param(
-<<<<<<< HEAD
     [string]$PythonVersion = "3.12",
-=======
-    [string]$PythonVersion = "3.10.11",
->>>>>>> 0bb3318d38c71253709e750afc86b6a3a31b6e6e
     [string]$CudaVersion = "13.0",
     [string]$VenvDir = ".venv"
 )

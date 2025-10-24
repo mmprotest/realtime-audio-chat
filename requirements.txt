@@ -1,8 +1,8 @@
-gradio==4.40.0
+gradio
 python-dotenv==1.0.1
 fastrtc==0.0.33
 fastrtc-whisper-cpp==0.1.2
-numpy==1.26.4
+numpy
 openai==1.40.2
 f5-tts==1.1.9
 torchcodec==0.8.0
