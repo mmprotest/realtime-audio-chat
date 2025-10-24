@@ -1,0 +1,312 @@
+"""FastRTC-compatible adapter for the Fish Audio OpenAudio S1 Mini model."""
+from __future__ import annotations
+
+import asyncio
+import os
+import re
+import threading
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, AsyncGenerator, Generator, Optional
+
+import numpy as np
+from numpy.typing import NDArray
+
+try:
+    import torch
+except ImportError as exc:  # pragma: no cover - torch is required for inference
+    raise ImportError("fish-speech adapter requires PyTorch to be installed") from exc
+
+try:
+    import resampy
+except ImportError:  # pragma: no cover - resampy is an optional dependency
+    resampy = None
+
+try:
+    from huggingface_hub import snapshot_download
+except ImportError as exc:  # pragma: no cover - required for automatic checkpoint download
+    raise ImportError(
+        "fish-speech adapter requires `huggingface_hub` to fetch checkpoints"
+    ) from exc
+
+try:
+    from fish_speech.inference_engine import TTSInferenceEngine
+    from fish_speech.models.dac.inference import load_model as load_decoder_model
+    from fish_speech.models.text2semantic.inference import launch_thread_safe_queue
+    from fish_speech.utils.schema import ServeReferenceAudio, ServeTTSRequest
+except ImportError as exc:  # pragma: no cover - fish-speech must be available at runtime
+    raise ImportError(
+        "fish-speech adapter requires the `fish-speech` package to be installed"
+    ) from exc
+
+
+DEFAULT_CHECKPOINT_REPO = "fishaudio/openaudio-s1-mini"
+DEFAULT_CHECKPOINT_DIR = Path("checkpoints/openaudio-s1-mini")
+DEFAULT_DECODER_CONFIG = "modded_dac_vq"
+
+
+@dataclass
+class TTSOptions:
+    """Placeholder for future configurable options."""
+
+    kwargs: dict[str, Any] | None = None
+
+
+class FishSpeechTTSModel:
+    """Wrap the Fish Audio OpenAudio S1 Mini model for use with FastRTC."""
+
+    def __init__(
+        self,
+        ref_wav: str,
+        ref_text: Optional[str] = None,
+        *,
+        checkpoint_dir: str | os.PathLike[str] | None = None,
+        download: bool = True,
+        device: Optional[str] = None,
+        precision: Optional[str] = None,
+        compile: bool | None = None,
+        inference_kwargs: Optional[dict[str, Any]] = None,
+        target_sample_rate: int | None = None,
+    ) -> None:
+        reference_path = Path(ref_wav)
+        if not reference_path.exists():
+            raise FileNotFoundError(f"Reference audio not found: {ref_wav}")
+
+        self._ref_audio_bytes = reference_path.read_bytes()
+        self._ref_text = (ref_text or "").strip()
+        self._checkpoint_dir = (
+            Path(checkpoint_dir) if checkpoint_dir is not None else DEFAULT_CHECKPOINT_DIR
+        )
+        self._download = download
+        self._device = self._resolve_device(device)
+        self._precision = self._resolve_precision(precision)
+        self._compile = bool(compile) if compile is not None else False
+        self._target_sample_rate = target_sample_rate
+
+        self._default_inference_kwargs = {
+            "chunk_length": 200,
+            "max_new_tokens": 1024,
+            "top_p": 0.9,
+            "repetition_penalty": 1.1,
+            "temperature": 0.9,
+            "seed": None,
+            "use_memory_cache": "off",
+            "normalize": True,
+            "format": "wav",
+            "streaming": False,
+        }
+        if inference_kwargs:
+            self._default_inference_kwargs.update(inference_kwargs)
+
+        self._engine: TTSInferenceEngine | None = None
+        self._load_lock = threading.Lock()
+        self._inference_lock = threading.Lock()
+
+    @staticmethod
+    def _resolve_device(device_hint: Optional[str]) -> str:
+        if device_hint:
+            return device_hint
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+        if hasattr(torch, "xpu") and torch.xpu.is_available():  # type: ignore[attr-defined]
+            return "xpu"
+        return "cpu"
+
+    def _resolve_precision(self, precision_hint: Optional[str]) -> torch.dtype:
+        if precision_hint:
+            precision_hint = precision_hint.lower()
+            if precision_hint in {"fp16", "float16", "half"}:
+                return torch.float16
+            if precision_hint in {"bf16", "bfloat16"}:
+                return torch.bfloat16
+            if precision_hint in {"fp32", "float32"}:
+                return torch.float32
+            raise ValueError(f"Unsupported precision hint: {precision_hint}")
+
+        if self._device == "cuda":
+            return torch.bfloat16
+        if self._device in {"mps", "xpu"}:
+            return torch.float16
+        return torch.float32
+
+    def _ensure_engine(self) -> TTSInferenceEngine:
+        if self._engine is not None:
+            return self._engine
+
+        with self._load_lock:
+            if self._engine is not None:
+                return self._engine
+
+            os.environ.setdefault("EINX_FILTER_TRACEBACK", "false")
+
+            checkpoint_dir = self._checkpoint_dir
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+            if self._download:
+                snapshot_download(
+                    repo_id=DEFAULT_CHECKPOINT_REPO,
+                    local_dir=str(checkpoint_dir),
+                    local_dir_use_symlinks=False,
+                )
+
+            llama_queue = launch_thread_safe_queue(
+                checkpoint_path=checkpoint_dir,
+                device=self._device,
+                precision=self._precision,
+                compile=self._compile,
+            )
+
+            decoder_checkpoint = checkpoint_dir / "codec.pth"
+            decoder_model = load_decoder_model(
+                config_name=DEFAULT_DECODER_CONFIG,
+                checkpoint_path=decoder_checkpoint,
+                device=self._device,
+            )
+
+            self._engine = TTSInferenceEngine(
+                llama_queue=llama_queue,
+                decoder_model=decoder_model,
+                compile=self._compile,
+                precision=self._precision,
+            )
+
+        return self._engine
+
+    def _build_request_kwargs(self, options: Optional[TTSOptions]) -> dict[str, Any]:
+        merged = dict(self._default_inference_kwargs)
+        if options and options.kwargs:
+            merged.update(options.kwargs)
+
+        request_kwargs: dict[str, Any] = {}
+        for key in [
+            "chunk_length",
+            "max_new_tokens",
+            "top_p",
+            "repetition_penalty",
+            "temperature",
+            "seed",
+            "use_memory_cache",
+            "normalize",
+            "format",
+            "streaming",
+        ]:
+            if key in merged and merged[key] is not None:
+                request_kwargs[key] = merged[key]
+
+        # Ensure chunk length remains within the range accepted by the schema.
+        chunk_length = request_kwargs.get("chunk_length")
+        if chunk_length is not None:
+            chunk_length = int(chunk_length)
+            request_kwargs["chunk_length"] = min(300, max(100, chunk_length))
+
+        if request_kwargs.get("format") not in {"wav", "pcm", "mp3"}:
+            request_kwargs["format"] = "wav"
+
+        use_memory_cache = request_kwargs.get("use_memory_cache")
+        if use_memory_cache not in {"on", "off"}:
+            request_kwargs["use_memory_cache"] = "off"
+
+        request_kwargs["streaming"] = False
+        request_kwargs.setdefault("normalize", True)
+        request_kwargs.setdefault("max_new_tokens", 1024)
+
+        return request_kwargs
+
+    def _prepare_references(self) -> list[ServeReferenceAudio]:
+        if not self._ref_audio_bytes:
+            return []
+        return [
+            ServeReferenceAudio(audio=self._ref_audio_bytes, text=self._ref_text or "")
+        ]
+
+    def _run_inference(
+        self, text: str, options: Optional[TTSOptions] = None
+    ) -> tuple[int, NDArray[np.float32]]:
+        engine = self._ensure_engine()
+        request_kwargs = self._build_request_kwargs(options)
+        references = self._prepare_references()
+
+        req = ServeTTSRequest(
+            text=text,
+            references=references,
+            reference_id=None,
+            **request_kwargs,
+        )
+
+        with self._inference_lock:
+            for result in engine.inference(req):
+                if result.code == "error" and result.error is not None:
+                    raise result.error
+                if result.code == "final" and result.audio is not None:
+                    sample_rate, audio = result.audio
+                    return self._post_process_audio(sample_rate, audio)
+
+        raise RuntimeError("Fish-Speech returned no audio for the provided text")
+
+    def _post_process_audio(
+        self, sample_rate: int, audio: np.ndarray
+    ) -> tuple[int, NDArray[np.float32]]:
+        audio = np.asarray(audio, dtype=np.float32)
+        if audio.ndim == 1:
+            audio = audio[None, :]
+        elif audio.ndim > 2:
+            audio = audio.reshape(audio.shape[0], -1)
+
+        target_rate = self._target_sample_rate
+        if target_rate and target_rate != sample_rate:
+            if resampy is None:
+                raise RuntimeError(
+                    "Resampling requested but `resampy` is not installed."
+                )
+            audio = resampy.resample(audio, sample_rate, target_rate, axis=-1).astype(
+                np.float32
+            )
+            sample_rate = target_rate
+
+        return sample_rate, audio
+
+    def tts(
+        self, text: str, options: Optional[TTSOptions] = None
+    ) -> tuple[int, NDArray[np.float32]]:
+        """Generate a single utterance synchronously."""
+
+        stripped = text.strip()
+        if not stripped:
+            raise ValueError("Cannot synthesize empty text")
+        return self._run_inference(stripped, options=options)
+
+    def stream_tts_sync(
+        self, text: str, options: Optional[TTSOptions] = None
+    ) -> Generator[tuple[int, NDArray[np.float32]], None, None]:
+        """Yield audio for each sentence-sized segment synchronously."""
+
+        for segment in _split_on_sentences(text):
+            stripped = segment.strip()
+            if not stripped:
+                continue
+            yield self._run_inference(stripped, options)
+
+    async def stream_tts(
+        self, text: str, options: Optional[TTSOptions] = None
+    ) -> AsyncGenerator[tuple[int, NDArray[np.float32]], None]:
+        """Asynchronously yield audio segments using a background thread."""
+
+        loop = asyncio.get_running_loop()
+        for segment in _split_on_sentences(text):
+            stripped = segment.strip()
+            if not stripped:
+                continue
+            result = await loop.run_in_executor(
+                None, self._run_inference, stripped, options
+            )
+            yield result
+
+
+def _split_on_sentences(text: str) -> list[str]:
+    pattern = re.compile(r"(?<=[.!?]\s)|(?<=\n)")
+    parts = pattern.split(text)
+    if not parts:
+        return [text]
+    return [part for part in parts if part]
