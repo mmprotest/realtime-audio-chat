@@ -1,7 +1,7 @@
 gradio
 python-dotenv==1.0.1
-fastrtc==0.0.33
-fastrtc-whisper-cpp==0.1.2
+fastrtc
+fastrtc-whisper-cpp
 numpy
 openai==1.40.2
 fish-speech @ git+https://github.com/fishaudio/fish-speech.git
