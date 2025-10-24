@@ -5,7 +5,7 @@ A reference implementation of a local realtime voice assistant that combines [Fa
 ## Features
 
 - **Bidirectional audio streaming** powered by FastRTC with optional TURN credentials for hosted deployments.
-- **Local speech-to-text** transcription via `fastrtc-whisper-cpp`.
+- **Local speech-to-text** transcription powered by a bundled Whisper.cpp wrapper.
 - **Configurable LLM backend** that targets any OpenAI-compatible API endpoint.
 - **Streaming text-to-speech** responses driven by the Fish-Speech OpenAudio S1 Mini model, returning audio as sentences complete.
 - **Gradio UI or telephony mode** based on the `MODE` environment variable.
@@ -15,6 +15,7 @@ A reference implementation of a local realtime voice assistant that combines [Fa
 ```text
 app.py                       # FastAPI + Gradio entrypoint and FastRTC stream handler
 fish_speech_adapter.py       # Fish-Speech OpenAudio S1 Mini adapter for FastRTC
+whisper_stt_adapter.py       # Local Whisper.cpp speech-to-text helper
 requirements.txt             # Core Python dependencies for the application runtime
 requirements-fish-speech.txt # Fish-Speech package (install with --no-deps)
 scripts/
@@ -55,7 +56,7 @@ Follow every step in order. Do not skip the verification prompts.
    - download Python 3.10.14 from python.org if it is missing and install it silently
    - install the Microsoft Visual C++ runtime and FFmpeg if they are absent
    - create a virtual environment at `.venv` and upgrade `pip`, `setuptools`, and `wheel`
-   - install the CUDA-enabled PyTorch wheels and the pinned runtime packages from `requirements.txt` (including `numpy<2` which torchaudio requires)
+   - install the CUDA-enabled PyTorch wheels and the pinned runtime packages from `requirements.txt` (including `numpy<2` which torchaudio requires and `pywhispercpp` for speech-to-text)
    - install the Fish-Speech package from `requirements-fish-speech.txt` using `--no-deps`
    - print the exact command to activate the environment when it finishes
 5. **Verify that Python works inside the virtual environment.** When the script finishes, follow its final prompt (normally `.\.venv\Scripts\Activate.ps1`). After activation, run:

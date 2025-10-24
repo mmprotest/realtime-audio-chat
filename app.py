@@ -11,13 +11,13 @@ from fastrtc import (
     get_twilio_turn_credentials,
 )
 from fastrtc.tracks import WebRTCData
-from fastrtc_whisper_cpp import get_stt_model
 from gradio.utils import get_space
 import numpy as np
 from numpy.typing import NDArray
 from openai import OpenAI
 
 from fish_speech_adapter import FishSpeechTTSModel
+from whisper_stt_adapter import get_stt_model
 
 load_dotenv()
 
