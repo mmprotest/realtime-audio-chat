@@ -32,7 +32,7 @@
     the script installs system packages.
 #>
 param(
-    [string]$PythonVersion = "3.10",
+    [string]$PythonVersion = "3.12",
     [string]$CudaVersion = "13.0",
     [string]$VenvDir = ".venv"
 )
