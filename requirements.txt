@@ -1,4 +1,4 @@
-gradio==4.40.0
+gradio
 python-dotenv==1.0.1
 fastrtc==0.0.33
 fastrtc-whisper-cpp==0.1.2
