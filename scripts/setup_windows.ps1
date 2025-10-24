@@ -455,7 +455,13 @@ $torchPackages = @(
     "torchaudio==2.3.1+cu121",
     "torchvision==0.18.1+cu121"
 )
-Invoke-Pip -PythonExe $venvPython -Arguments @("install", "--index-url", $torchIndex, "--extra-index-url", "https://pypi.org/simple") + $torchPackages
+$torchArgs = @(
+    "install",
+    "--index-url", $torchIndex,
+    "--extra-index-url", "https://pypi.org/simple"
+)
+$torchArgs += $torchPackages
+Invoke-Pip -PythonExe $venvPython -Arguments $torchArgs
 
 Write-Section "Installing project requirements"
 $repoRoot = (Get-Location).Path
