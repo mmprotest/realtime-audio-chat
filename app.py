@@ -1,3 +1,4 @@
+import inspect
 import os
 import time
 from functools import lru_cache
@@ -21,6 +22,38 @@ from fish_speech_adapter import FishSpeechTTSModel
 from src.stt_client import DEFAULT_STT_URL, RemoteSTT
 
 load_dotenv()
+
+
+def _patch_gradio_time_limit() -> None:
+    """Allow FastRTC to pass `time_limit` on older Gradio builds."""
+
+    try:
+        from gradio.events import EventListener
+    except Exception:  # pragma: no cover - defensive import guard
+        return
+
+    setup = EventListener._setup
+    try:
+        has_time_limit = "time_limit" in inspect.signature(setup).parameters
+    except (TypeError, ValueError):
+        has_time_limit = False
+
+    if has_time_limit:
+        return
+
+    def _setup_with_time_limit(*args, **kwargs):
+        event_trigger = setup(*args, **kwargs)
+
+        def _patched_event_trigger(*event_args, **event_kwargs):
+            event_kwargs.pop("time_limit", None)
+            return event_trigger(*event_args, **event_kwargs)
+
+        return _patched_event_trigger
+
+    EventListener._setup = staticmethod(_setup_with_time_limit)  # type: ignore[attr-defined]
+
+
+_patch_gradio_time_limit()
 
 openai_client = OpenAI(
     api_key=os.getenv("LOCAL_OPENAI_API_KEY", "dummy"),
