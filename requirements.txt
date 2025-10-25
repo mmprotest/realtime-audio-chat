@@ -1,9 +1,13 @@
-gradio
+gradio==4.44.1
 python-dotenv==1.0.1
 fastrtc==0.0.33
 numpy>=1.26.4,<2
 pydantic==2.9.2
 openai==1.40.2
+# The OpenAI Python client still configures the underlying httpx.Client with the deprecated
+# "proxies" keyword, which was removed in httpx 0.28+. Keep the dependency pinned to a
+# compatible release line until the client is updated upstream.
+httpx>=0.27.2,<0.28
 huggingface_hub==0.26.5
 resampy==0.4.3
 fastapi==0.115.6
