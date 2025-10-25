@@ -108,7 +108,7 @@ class FishSpeechTTSModel:
         self._precision = self._resolve_precision(precision)
         self._compile = bool(compile) if compile is not None else False
         self._target_sample_rate = target_sample_rate
-        self._hf_token = self._resolve_hf_token(hf_token)
+        self._hf_token = self._resolve_hf_token()
 
         self._default_inference_kwargs = {
             "chunk_length": 200,
@@ -159,11 +159,8 @@ class FishSpeechTTSModel:
         return torch.float32
 
     @staticmethod
-    def _resolve_hf_token(explicit_token: Optional[str]) -> Optional[str]:
-        """Resolve the Hugging Face token from explicit input or environment."""
-
-        if explicit_token and explicit_token.strip():
-            return explicit_token.strip()
+    def _resolve_hf_token() -> Optional[str]:
+        """Resolve the Hugging Face token from environment variables."""
 
         # Accept a handful of common environment variable names so users can
         # configure credentials without modifying code.
@@ -209,8 +206,7 @@ class FishSpeechTTSModel:
                             "Authentication is required to download Fish Audio checkpoints. "
                             "Set the FISH_SPEECH_HF_TOKEN environment variable (or one of "
                             "HF_TOKEN, HUGGINGFACE_TOKEN, HUGGINGFACE_HUB_TOKEN, "
-                            "HUGGINGFACEHUB_API_TOKEN) with a valid Hugging Face access token "
-                            "or pass `hf_token` to FishSpeechTTSModel."
+                            "HUGGINGFACEHUB_API_TOKEN) with a valid Hugging Face access token."
                         ) from exc
                     raise
 
