@@ -25,6 +25,7 @@ except ImportError:  # pragma: no cover - resampy is an optional dependency
 
 try:
     from huggingface_hub import snapshot_download
+    from huggingface_hub.utils import HfHubHTTPError
 except ImportError as exc:  # pragma: no cover - required for automatic checkpoint download
     raise ImportError(
         "fish-speech adapter requires `huggingface_hub` to fetch checkpoints"
@@ -106,6 +107,7 @@ class FishSpeechTTSModel:
         self._precision = self._resolve_precision(precision)
         self._compile = bool(compile) if compile is not None else False
         self._target_sample_rate = target_sample_rate
+        self._hf_token = self._resolve_hf_token()
 
         self._default_inference_kwargs = {
             "chunk_length": 200,
@@ -155,6 +157,26 @@ class FishSpeechTTSModel:
             return torch.float16
         return torch.float32
 
+    @staticmethod
+    def _resolve_hf_token() -> Optional[str]:
+        """Resolve the Hugging Face token from environment variables."""
+
+        # Accept a handful of common environment variable names so users can
+        # configure credentials without modifying code.
+        env_vars = (
+            "FISH_SPEECH_HF_TOKEN",
+            "HF_TOKEN",
+            "HUGGINGFACE_TOKEN",
+            "HUGGINGFACE_HUB_TOKEN",
+            "HUGGINGFACEHUB_API_TOKEN",
+        )
+        for env_var in env_vars:
+            token = os.getenv(env_var)
+            if token and token.strip():
+                return token.strip()
+
+        return None
+
     def _ensure_engine(self) -> TTSInferenceEngine:
         if self._engine is not None:
             return self._engine
@@ -169,11 +191,23 @@ class FishSpeechTTSModel:
             checkpoint_dir.mkdir(parents=True, exist_ok=True)
 
             if self._download:
-                snapshot_download(
-                    repo_id=DEFAULT_CHECKPOINT_REPO,
-                    local_dir=str(checkpoint_dir),
-                    local_dir_use_symlinks=False,
-                )
+                try:
+                    snapshot_download(
+                        repo_id=DEFAULT_CHECKPOINT_REPO,
+                        local_dir=str(checkpoint_dir),
+                        local_dir_use_symlinks=False,
+                        token=self._hf_token,
+                    )
+                except HfHubHTTPError as exc:  # pragma: no cover - network failure path
+                    status_code = getattr(exc.response, "status_code", None)
+                    if status_code in {401, 403}:
+                        raise RuntimeError(
+                            "Authentication is required to download Fish Audio checkpoints. "
+                            "Set the FISH_SPEECH_HF_TOKEN environment variable (or one of "
+                            "HF_TOKEN, HUGGINGFACE_TOKEN, HUGGINGFACE_HUB_TOKEN, "
+                            "HUGGINGFACEHUB_API_TOKEN) with a valid Hugging Face access token."
+                        ) from exc
+                    raise
 
             llama_queue = launch_thread_safe_queue(
                 checkpoint_path=checkpoint_dir,
