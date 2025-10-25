@@ -7,6 +7,11 @@ try:
 except ImportError:  # pragma: no cover - optional dependency guard
     torch = None
 
+try:
+    import ctranslate2
+except ImportError:  # pragma: no cover - optional dependency guard
+    ctranslate2 = None
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from faster_whisper import WhisperModel
@@ -16,24 +21,29 @@ from .service_config import STTSettings
 app = FastAPI(title="STT Service", version="1.0.0")
 
 
-# Resolve device & compute_type robustly
-def _torch_cuda_available() -> bool:
-    if torch is None:
-        return False
-    try:
-        return bool(torch.cuda.is_available())
-    except Exception:  # pragma: no cover - defensive
-        return False
+def _cuda_available() -> bool:
+    if torch is not None:
+        try:
+            if torch.cuda.is_available():
+                return True
+        except Exception:  # pragma: no cover - defensive
+            pass
+    if ctranslate2 is not None:
+        try:
+            return ctranslate2.get_device_count("cuda") > 0
+        except Exception:  # pragma: no cover - defensive
+            return False
+    return False
 
 
 def pick_device() -> str:
     want = os.getenv("STT_DEVICE", "auto").lower()
     if want == "cuda":
-        return "cuda" if _torch_cuda_available() else "cpu"
+        return "cuda" if _cuda_available() else "cpu"
     if want == "cpu":
         return "cpu"
     # auto
-    return "cuda" if _torch_cuda_available() else "cpu"
+    return "cuda" if _cuda_available() else "cpu"
 
 
 def pick_compute_type(device: str) -> str:

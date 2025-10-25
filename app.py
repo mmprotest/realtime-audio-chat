@@ -1,5 +1,6 @@
 import os
 import time
+from functools import lru_cache
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -17,7 +18,7 @@ from numpy.typing import NDArray
 from openai import OpenAI
 
 from fish_speech_adapter import FishSpeechTTSModel
-from src.stt_client import RemoteSTT
+from src.stt_client import DEFAULT_STT_URL, RemoteSTT
 
 load_dotenv()
 
@@ -27,26 +28,16 @@ openai_client = OpenAI(
 )
 
 
+@lru_cache(maxsize=1)
 def get_stt_callable():
-    stt_url = os.getenv("STT_URL")
-    if stt_url:
-        try:
-            return RemoteSTT(stt_url).transcribe
-        except Exception as exc:
-            raise RuntimeError(
-                f"Failed to connect to remote STT at {stt_url}. Ensure the STT service is running and reachable."
-            ) from exc
+    stt_url = os.getenv("STT_URL") or DEFAULT_STT_URL
     try:
-        from whisper_stt_adapter import get_stt_model
-
-        return get_stt_model().stt
-    except Exception as exc:  # pragma: no cover - import guard
+        return RemoteSTT(stt_url).transcribe
+    except Exception as exc:  # pragma: no cover - connection guard
         raise RuntimeError(
-            "No STT configured. Set STT_URL to a running STT service or install the local Whisper adapter."
+            "Unable to reach the speech-to-text service. Start it with "
+            "`pwsh scripts/run-stt.ps1` or update the STT_URL environment variable."
         ) from exc
-
-
-stt_transcribe = get_stt_callable()
 
 def _parse_bool(value: str | None, default: bool) -> bool:
     if value is None:
@@ -184,6 +175,7 @@ def response(
     audio = audio_payload
     messages = [{"role": d["role"], "content": d["content"]} for d in chatbot]
     start = time.time()
+    stt_transcribe = get_stt_callable()
     text = stt_transcribe(audio)
     print("transcription", time.time() - start)
     print("prompt", text)

@@ -1,8 +1,19 @@
 # STT Microservice
 
-This FastAPI application exposes Faster-Whisper speech-to-text over HTTP so the main realtime chat app can offload transcription to its own Python environment.
+This FastAPI application exposes Faster-Whisper speech-to-text over HTTP so the main realtime chat
+app can offload transcription to its own Python environment.
 
-## Setup
+## Quickstart (Windows PowerShell)
+
+```powershell
+pwsh scripts/setup-stt.ps1
+pwsh scripts/run-stt.ps1
+```
+
+The service listens on `http://127.0.0.1:5007` by default. Adjust `STT_PORT` before launching to
+change the binding.
+
+## Manual Setup
 
 ```powershell
 python -m venv .venv-stt
@@ -21,12 +32,6 @@ Environment variables influence how the model loads:
 - `STT_PORT` (default `5007`) – HTTP listen port.
 
 When `STT_DEVICE=auto`, the service picks CUDA if available, otherwise CPU (int8 inference).
-
-## Run
-
-```powershell
-pwsh scripts/run-stt.ps1
-```
 
 ## Example Request
 
