@@ -1,6 +1,6 @@
 # core
 numpy<2
-pyav>=12
+av>=12
 
 # web
 fastapi==0.115.2
