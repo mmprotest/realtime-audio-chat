@@ -17,7 +17,7 @@ from numpy.typing import NDArray
 from openai import OpenAI
 
 from fish_speech_adapter import FishSpeechTTSModel
-from whisper_stt_adapter import get_stt_model
+from src.stt_client import RemoteSTT
 
 load_dotenv()
 
@@ -26,7 +26,27 @@ openai_client = OpenAI(
     base_url=os.getenv("LOCAL_OPENAI_BASE_URL", "http://127.0.0.1:1234/v1"),
 )
 
-stt_model = get_stt_model()
+
+def get_stt_callable():
+    stt_url = os.getenv("STT_URL")
+    if stt_url:
+        try:
+            return RemoteSTT(stt_url).transcribe
+        except Exception as exc:
+            raise RuntimeError(
+                f"Failed to connect to remote STT at {stt_url}. Ensure the STT service is running and reachable."
+            ) from exc
+    try:
+        from whisper_stt_adapter import get_stt_model
+
+        return get_stt_model().stt
+    except Exception as exc:  # pragma: no cover - import guard
+        raise RuntimeError(
+            "No STT configured. Set STT_URL to a running STT service or install the local Whisper adapter."
+        ) from exc
+
+
+stt_transcribe = get_stt_callable()
 
 def _parse_bool(value: str | None, default: bool) -> bool:
     if value is None:
@@ -164,7 +184,7 @@ def response(
     audio = audio_payload
     messages = [{"role": d["role"], "content": d["content"]} for d in chatbot]
     start = time.time()
-    text = stt_model.stt(audio)
+    text = stt_transcribe(audio)
     print("transcription", time.time() - start)
     print("prompt", text)
     chatbot.append({"role": "user", "content": text})
