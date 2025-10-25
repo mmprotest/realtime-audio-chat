@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import os
 import re
 import threading
@@ -50,6 +51,9 @@ def _ensure_fish_speech_project_root() -> None:
         # upcoming import will still surface the original error message, which
         # is more helpful than masking it with our own exception.
         return
+
+
+logger = logging.getLogger(__name__)
 
 
 _ensure_fish_speech_project_root()
@@ -130,10 +134,70 @@ class FishSpeechTTSModel:
         self._inference_lock = threading.Lock()
 
     @staticmethod
-    def _resolve_device(device_hint: Optional[str]) -> str:
+    def _is_cuda_compatible() -> bool:
+        """Return ``True`` when the active CUDA device is supported by PyTorch."""
+
+        if not torch.cuda.is_available():
+            return False
+
+        try:
+            major, minor = torch.cuda.get_device_capability(0)
+        except Exception:  # pragma: no cover - device query failure
+            return False
+
+        device_name: str
+        try:
+            device_name = torch.cuda.get_device_name(0)
+        except Exception:  # pragma: no cover - fallback when the driver is unavailable
+            device_name = "CUDA device"
+
+        arch = f"sm_{major}{minor}"
+
+        get_arch_list = getattr(torch.cuda, "get_arch_list", None)
+        supported_arches: set[str] | None = None
+        if callable(get_arch_list):
+            try:
+                supported_arches = {entry.lower() for entry in get_arch_list()}
+            except Exception:  # pragma: no cover - guard against backend introspection failures
+                supported_arches = None
+
+        if supported_arches is not None and arch.lower() not in supported_arches:
+            supported = ", ".join(sorted(supported_arches)) or "<unknown>"
+            logger.warning(
+                "Falling back to CPU because %s exposes compute capability %s "
+                "which is not supported by this PyTorch build (supported: %s).",
+                device_name,
+                arch,
+                supported,
+            )
+            return False
+
+        try:
+            torch.zeros(1, device="cuda")
+        except RuntimeError as exc:  # pragma: no cover - CUDA runtime failure
+            message = str(exc)
+            if "no kernel image" in message or "not compatible" in message:
+                logger.warning(
+                    "Falling back to CPU because %s is incompatible with this "
+                    "PyTorch build: %s",
+                    device_name,
+                    message.strip(),
+                )
+                return False
+            raise
+
+        return True
+
+    def _resolve_device(self, device_hint: Optional[str]) -> str:
         if device_hint:
+            if device_hint.startswith("cuda") and not self._is_cuda_compatible():
+                logger.warning(
+                    "Requested CUDA device is not supported; using CPU instead."
+                )
+                return "cpu"
             return device_hint
-        if torch.cuda.is_available():
+
+        if self._is_cuda_compatible():
             return "cuda"
         if torch.backends.mps.is_available():
             return "mps"
