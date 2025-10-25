@@ -6,13 +6,6 @@ from functools import lru_cache
 import gradio as gr
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from fastrtc import (
-    AdditionalOutputs,
-    ReplyOnPause,
-    Stream,
-    get_twilio_turn_credentials,
-)
-from fastrtc.tracks import WebRTCData
 from gradio.utils import get_space
 import numpy as np
 from numpy.typing import NDArray
@@ -51,9 +44,16 @@ def _patch_gradio_time_limit() -> None:
         return _patched_event_trigger
 
     EventListener._setup = staticmethod(_setup_with_time_limit)  # type: ignore[attr-defined]
-
-
 _patch_gradio_time_limit()
+
+from fastrtc import (
+    AdditionalOutputs,
+    ReplyOnPause,
+    Stream,
+    get_twilio_turn_credentials,
+)
+from fastrtc.tracks import WebRTCData
+
 
 openai_client = OpenAI(
     api_key=os.getenv("LOCAL_OPENAI_API_KEY", "dummy"),
