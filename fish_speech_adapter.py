@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import logging
 import os
 import re
 import threading
@@ -52,6 +53,9 @@ def _ensure_fish_speech_project_root() -> None:
         return
 
 
+logger = logging.getLogger(__name__)
+
+
 _ensure_fish_speech_project_root()
 
 try:
@@ -93,6 +97,7 @@ class FishSpeechTTSModel:
         inference_kwargs: Optional[dict[str, Any]] = None,
         target_sample_rate: int | None = None,
         hf_token: Optional[str] = None,
+        allow_unsupported_cuda: bool | None = None,
     ) -> None:
         reference_path = Path(ref_wav)
         if not reference_path.exists():
@@ -104,6 +109,9 @@ class FishSpeechTTSModel:
             Path(checkpoint_dir) if checkpoint_dir is not None else DEFAULT_CHECKPOINT_DIR
         )
         self._download = download
+        self._allow_unsupported_cuda = self._resolve_allow_unsupported_cuda(
+            allow_unsupported_cuda
+        )
         self._device = self._resolve_device(device)
         self._precision = self._resolve_precision(precision)
         self._compile = bool(compile) if compile is not None else False
@@ -130,10 +138,112 @@ class FishSpeechTTSModel:
         self._inference_lock = threading.Lock()
 
     @staticmethod
-    def _resolve_device(device_hint: Optional[str]) -> str:
+    def _parse_truthy(value: str | None) -> bool:
+        if value is None:
+            return False
+        value = value.strip().lower()
+        return value in {"1", "true", "yes", "on"}
+
+    def _resolve_allow_unsupported_cuda(
+        self, hint: bool | None
+    ) -> bool:
+        if hint is not None:
+            return bool(hint)
+
+        env_value = os.getenv("FISH_SPEECH_ALLOW_UNSUPPORTED_CUDA")
+        if env_value is not None:
+            return self._parse_truthy(env_value)
+
+        return False
+
+    def _is_cuda_compatible(self) -> bool:
+        """Return ``True`` when the active CUDA device is supported by PyTorch."""
+
+        if not torch.cuda.is_available():
+            return False
+
+        try:
+            major, minor = torch.cuda.get_device_capability(0)
+        except Exception:  # pragma: no cover - device query failure
+            return False
+
+        device_name: str
+        try:
+            device_name = torch.cuda.get_device_name(0)
+        except Exception:  # pragma: no cover - fallback when the driver is unavailable
+            device_name = "CUDA device"
+
+        arch = f"sm_{major}{minor}"
+
+        get_arch_list = getattr(torch.cuda, "get_arch_list", None)
+        supported_arches: set[str] | None = None
+        if callable(get_arch_list):
+            try:
+                supported_arches = {entry.lower() for entry in get_arch_list()}
+            except Exception:  # pragma: no cover - guard against backend introspection failures
+                supported_arches = None
+
+        if supported_arches is not None and arch.lower() not in supported_arches:
+            supported = ", ".join(sorted(supported_arches)) or "<unknown>"
+            message = (
+                "Detected CUDA device %s with compute capability %s which is "
+                "not part of this PyTorch build (supported: %s)."
+            )
+            if self._allow_unsupported_cuda:
+                logger.warning(message, device_name, arch, supported)
+            else:
+                logger.warning(
+                    message + " Falling back to CPU. Set "
+                    "FISH_SPEECH_ALLOW_UNSUPPORTED_CUDA=1 to bypass this check.",
+                    device_name,
+                    arch,
+                    supported,
+                )
+                return False
+
+        try:
+            torch.zeros(1, device="cuda")
+        except RuntimeError as exc:  # pragma: no cover - CUDA runtime failure
+            message = str(exc)
+            normalized = message.lower()
+            if "no kernel image" in normalized or "not compatible" in normalized:
+                if self._allow_unsupported_cuda:
+                    logger.warning(
+                        "%s reported a compatibility issue: %s. Continuing "
+                        "because unsupported CUDA has been explicitly allowed.",
+                        device_name,
+                        message.strip(),
+                    )
+                    return True
+                logger.warning(
+                    "Falling back to CPU because %s is incompatible with this "
+                    "PyTorch build: %s. Set FISH_SPEECH_ALLOW_UNSUPPORTED_CUDA=1 "
+                    "to attempt running on this device anyway.",
+                    device_name,
+                    message.strip(),
+                )
+                return False
+            raise
+
+        return True
+
+    def _resolve_device(self, device_hint: Optional[str]) -> str:
         if device_hint:
+            if device_hint.startswith("cuda") and not self._is_cuda_compatible():
+                if self._allow_unsupported_cuda:
+                    logger.warning(
+                        "Attempting to use CUDA device %s despite compatibility "
+                        "warnings.",
+                        device_hint,
+                    )
+                    return device_hint
+                logger.warning(
+                    "Requested CUDA device is not supported; using CPU instead."
+                )
+                return "cpu"
             return device_hint
-        if torch.cuda.is_available():
+
+        if self._is_cuda_compatible():
             return "cuda"
         if torch.backends.mps.is_available():
             return "mps"
@@ -210,12 +320,29 @@ class FishSpeechTTSModel:
                         ) from exc
                     raise
 
-            llama_queue = launch_thread_safe_queue(
-                checkpoint_path=checkpoint_dir,
-                device=self._device,
-                precision=self._precision,
-                compile=self._compile,
-            )
+            try:
+                llama_queue = launch_thread_safe_queue(
+                    checkpoint_path=checkpoint_dir,
+                    device=self._device,
+                    precision=self._precision,
+                    compile=self._compile,
+                )
+            except RuntimeError as exc:
+                error_message = str(exc)
+                if (
+                    self._device.startswith("cuda")
+                    and "no kernel image" in error_message.lower()
+                    and not self._allow_unsupported_cuda
+                ):
+                    raise RuntimeError(
+                        "Failed to initialize Fish-Speech on CUDA because the "
+                        "installed PyTorch build does not include kernels for the "
+                        "detected GPU architecture. Reinstall PyTorch with CUDA "
+                        "support for this GPU (see https://pytorch.org/get-started/locally/) "
+                        "or set FISH_SPEECH_ALLOW_UNSUPPORTED_CUDA=1 to force GPU "
+                        "initialization at your own risk."
+                    ) from exc
+                raise
 
             decoder_checkpoint = checkpoint_dir / "codec.pth"
             decoder_model = load_decoder_model(
