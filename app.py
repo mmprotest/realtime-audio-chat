@@ -118,7 +118,17 @@ def _gradio_supports_stream_time_limit() -> bool:
     except (TypeError, ValueError):
         return False
 
-    return "time_limit" in signature.parameters
+    if "time_limit" not in signature.parameters:
+        return False
+
+    try:
+        from gradio.events import EventListener
+
+        event_signature = inspect.signature(EventListener._setup)
+    except (AttributeError, ImportError, TypeError, ValueError):
+        return False
+
+    return "time_limit" in event_signature.parameters
 
 
 def _should_flush(sentence_buffer: str) -> bool:
