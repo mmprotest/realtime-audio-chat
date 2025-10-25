@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import re
 import threading
@@ -28,6 +29,29 @@ except ImportError as exc:  # pragma: no cover - required for automatic checkpoi
     raise ImportError(
         "fish-speech adapter requires `huggingface_hub` to fetch checkpoints"
     ) from exc
+
+def _ensure_fish_speech_project_root() -> None:
+    """Create the indicator file expected by pyrootutils inside the package."""
+
+    spec = importlib.util.find_spec("fish_speech")
+    if not spec or not spec.submodule_search_locations:
+        return
+
+    package_root = Path(next(iter(spec.submodule_search_locations)))
+    indicator = package_root / ".project-root"
+    if indicator.exists():
+        return
+
+    try:
+        indicator.touch(exist_ok=True)
+    except OSError:
+        # If the environment is read-only we silently ignore the failure. The
+        # upcoming import will still surface the original error message, which
+        # is more helpful than masking it with our own exception.
+        return
+
+
+_ensure_fish_speech_project_root()
 
 try:
     from fish_speech.inference_engine import TTSInferenceEngine
