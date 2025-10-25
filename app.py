@@ -1,3 +1,4 @@
+import inspect
 import os
 import time
 from functools import lru_cache
@@ -5,13 +6,6 @@ from functools import lru_cache
 import gradio as gr
 from dotenv import load_dotenv
 from fastapi import FastAPI
-from fastrtc import (
-    AdditionalOutputs,
-    ReplyOnPause,
-    Stream,
-    get_twilio_turn_credentials,
-)
-from fastrtc.tracks import WebRTCData
 from gradio.utils import get_space
 import numpy as np
 from numpy.typing import NDArray
@@ -21,6 +15,15 @@ from fish_speech_adapter import FishSpeechTTSModel
 from src.stt_client import DEFAULT_STT_URL, RemoteSTT
 
 load_dotenv()
+
+from fastrtc import (
+    AdditionalOutputs,
+    ReplyOnPause,
+    Stream,
+    get_twilio_turn_credentials,
+)
+from fastrtc.tracks import WebRTCData
+
 
 openai_client = OpenAI(
     api_key=os.getenv("LOCAL_OPENAI_API_KEY", "dummy"),
@@ -101,6 +104,21 @@ fish_tts_model = FishSpeechTTSModel(
 )
 
 LOCAL_OPENAI_MODEL = os.getenv("LOCAL_OPENAI_MODEL", "llama-3.1-8b-instruct")
+
+
+@lru_cache(maxsize=1)
+def _gradio_supports_stream_time_limit() -> bool:
+    try:
+        component = gr.Image()
+    except Exception:
+        return False
+
+    try:
+        signature = inspect.signature(component.stream)
+    except (TypeError, ValueError):
+        return False
+
+    return "time_limit" in signature.parameters
 
 
 def _should_flush(sentence_buffer: str) -> bool:
@@ -216,18 +234,23 @@ def response(
 
 
 chatbot = gr.Chatbot(type="messages")
-stream = Stream(
-    modality="audio",
-    mode="send-receive",
-    handler=ReplyOnPause(response, input_sample_rate=16000),
-    additional_outputs_handler=lambda a, b: b,
-    additional_inputs=[chatbot],
-    additional_outputs=[chatbot],
-    rtc_configuration=get_twilio_turn_credentials() if get_space() else None,
-    concurrency_limit=5 if get_space() else None,
-    time_limit=90 if get_space() else None,
-    ui_args={"title": "LLM Voice Chat (Local LLM, Whisper, and Fish-Speech ⚡️)"},
-)
+stream_kwargs: dict[str, object] = {
+    "modality": "audio",
+    "mode": "send-receive",
+    "handler": ReplyOnPause(response, input_sample_rate=16000),
+    "additional_outputs_handler": lambda a, b: b,
+    "additional_inputs": [chatbot],
+    "additional_outputs": [chatbot],
+    "rtc_configuration": get_twilio_turn_credentials() if get_space() else None,
+    "concurrency_limit": 5 if get_space() else None,
+    "time_limit": 90 if get_space() else None,
+    "ui_args": {"title": "LLM Voice Chat (Local LLM, Whisper, and Fish-Speech ⚡️)"},
+}
+
+if not _gradio_supports_stream_time_limit():
+    stream_kwargs.pop("time_limit", None)
+
+stream = Stream(**stream_kwargs)
 
 # Mount the STREAM UI to the FastAPI app
 # Because I don't want to build the UI manually
