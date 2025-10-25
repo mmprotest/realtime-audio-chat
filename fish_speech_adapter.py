@@ -92,6 +92,7 @@ class FishSpeechTTSModel:
         compile: bool | None = None,
         inference_kwargs: Optional[dict[str, Any]] = None,
         target_sample_rate: int | None = None,
+        hf_token: Optional[str] = None,
     ) -> None:
         reference_path = Path(ref_wav)
         if not reference_path.exists():
