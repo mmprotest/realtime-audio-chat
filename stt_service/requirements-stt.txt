@@ -6,6 +6,7 @@ av>=12
 fastapi==0.115.2
 uvicorn[standard]==0.30.6
 pydantic>=2.8.2
+python-multipart>=0.0.9
 
 # faster-whisper stack
 faster-whisper==1.2.0
