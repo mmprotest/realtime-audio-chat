@@ -154,6 +154,29 @@ python app.py
 - **Web UI:** Visit <http://127.0.0.1:7860> to interact with the assistant. Click **Connect** to start streaming audio.
 - **Phone bridge:** Set `MODE=PHONE` and supply the TURN credentials required by FastRTC to enable the telephony handler.
 
+## Option B (Two venvs)
+
+Run the STT service and the app in isolated Python environments when you want to keep Faster-Whisper and Fish-Speech dependencies separate.
+
+### Setup
+
+```powershell
+# STT venv
+pwsh scripts/setup-stt.ps1
+pwsh scripts/run-stt.ps1   # serves on 127.0.0.1:5007
+
+# App venv
+pwsh scripts/setup-app.ps1
+$env:STT_URL="http://127.0.0.1:5007"
+pwsh scripts/run-app.ps1
+```
+
+### Smoke test
+
+```powershell
+pwsh scripts/smoke-test.ps1
+```
+
 ## Troubleshooting Checklist
 
 - **The setup script stops with a 404 when downloading Python.** Ensure the machine has internet access. If python.org is blocked, pass a specific version that you know exists, for example `-PythonVersion 3.10.13`.
