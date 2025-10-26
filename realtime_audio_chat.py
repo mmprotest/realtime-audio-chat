@@ -21,7 +21,7 @@ from openai import OpenAI
 load_dotenv()
 
 # --- Configuration --------------------------------------------------------------------
-FASTER_WHISPER_API_URL = os.getenv("FASTER_WHISPER_API_URL", "http://localhost:8000").rstrip("/")
+FASTER_WHISPER_API_URL = os.getenv("FASTER_WHISPER_API_URL", "http://0.0.0.0:8080").rstrip("/")
 FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "medium")
 FASTER_WHISPER_TASK = os.getenv("FASTER_WHISPER_TASK", "transcribe")
 FASTER_WHISPER_LANGUAGE = os.getenv("FASTER_WHISPER_LANGUAGE", "").strip()
@@ -36,8 +36,8 @@ F5_SEED = os.getenv("F5_SEED")
 F5_REQUEST_TIMEOUT = float(os.getenv("F5_REQUEST_TIMEOUT", "300"))
 F5_CHUNK_DURATION = float(os.getenv("F5_CHUNK_DURATION", "0.5"))
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or None
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY","blah")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL","http://127.0.0.1:1234/v1") or None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "512"))
 OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
