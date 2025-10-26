@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import time
 from typing import Iterable, List, Sequence
@@ -158,9 +159,54 @@ def generate_response(messages: Sequence[dict[str, str]]) -> str:
 
 # --- FastRTC Handler ------------------------------------------------------------------
 
+def _normalize_chat_history(
+    history: object | None,
+) -> List[dict[str, str]]:
+    """Coerce the incoming chat history into a list of ``{"role", "content"}`` dicts."""
+
+    if history is None:
+        return []
+
+    if isinstance(history, str):
+        # FastRTC/Gradio can sometimes pass serialized JSON instead of python objects.
+        try:
+            history = json.loads(history)
+        except json.JSONDecodeError:
+            return []
+
+    if isinstance(history, dict):
+        # Some browser clients may send a dict containing the messages list.
+        history = history.get("messages") or history.get("data") or []
+
+    normalized: List[dict[str, str]] = []
+    if isinstance(history, list):
+        for entry in history:
+            if isinstance(entry, dict):
+                role = entry.get("role")
+                content = entry.get("content")
+                if isinstance(content, dict):
+                    # Gradio 4 can wrap message content with a ``{"text": {"value": ...}}`` structure.
+                    content = content.get("text") or content.get("value")
+                    if isinstance(content, dict):
+                        content = content.get("value")
+                if isinstance(content, list):
+                    # Join list-based content into a plain string for the LLM.
+                    content = " ".join(str(part) for part in content)
+                if role and isinstance(content, str):
+                    normalized.append({"role": role, "content": content})
+            elif isinstance(entry, (tuple, list)) and len(entry) == 2:
+                # Legacy chatbot format of ``[(user, assistant), ...]``.
+                user, assistant = entry
+                if user is not None:
+                    normalized.append({"role": "user", "content": str(user)})
+                if assistant is not None:
+                    normalized.append({"role": "assistant", "content": str(assistant)})
+    return normalized
+
+
 def response(
     audio: tuple[int, NDArray[np.int16 | np.float32]] | None,
-    chatbot: List[dict[str, str]] | None = None,
+    chatbot: List[dict[str, str]] | str | dict | None = None,
     event: object | None = None,
 ):
     """Handle audio from the user, returning streamed audio + chatbot updates."""
@@ -172,10 +218,8 @@ def response(
         # FastRTC can invoke the handler with no audio payload during setup/teardown.
         return
 
-    chatbot = list(chatbot or [])
-    messages: List[dict[str, str]] = [
-        {"role": entry["role"], "content": entry["content"]} for entry in chatbot
-    ]
+    chatbot = _normalize_chat_history(chatbot)
+    messages: List[dict[str, str]] = list(chatbot)
 
     start = time.time()
     user_text = transcribe_audio(audio)
