@@ -21,7 +21,7 @@ from openai import OpenAI
 load_dotenv()
 
 # --- Configuration --------------------------------------------------------------------
-FASTER_WHISPER_API_URL = os.getenv("FASTER_WHISPER_API_URL", "http://localhost:8080").rstrip("/")
+FASTER_WHISPER_API_URL = os.getenv("FASTER_WHISPER_API_URL", "http://localhost:8000").rstrip("/")
 FASTER_WHISPER_MODEL = os.getenv("FASTER_WHISPER_MODEL", "medium")
 FASTER_WHISPER_TASK = os.getenv("FASTER_WHISPER_TASK", "transcribe")
 FASTER_WHISPER_LANGUAGE = os.getenv("FASTER_WHISPER_LANGUAGE", "").strip()
@@ -29,18 +29,18 @@ FASTER_WHISPER_BEAM_SIZE = int(os.getenv("FASTER_WHISPER_BEAM_SIZE", "5"))
 FASTER_WHISPER_TIMEOUT = float(os.getenv("FASTER_WHISPER_TIMEOUT", "120"))
 
 F5_TTS_API_URL = os.getenv("F5_TTS_API_URL", "http://127.0.0.1:8000").rstrip("/")
-F5_REFERENCE_AUDIO = os.getenv("F5_REFERENCE_AUDIO", "morgan.mp3")
-F5_REFERENCE_TEXT = os.getenv("F5_REFERENCE_TEXT", "When I was 17 yeard old, I could throw a baseball 90 miles an hour.")
+F5_REFERENCE_AUDIO = os.getenv("F5_REFERENCE_AUDIO", "")
+F5_REFERENCE_TEXT = os.getenv("F5_REFERENCE_TEXT", "")
 F5_REMOVE_SILENCE = os.getenv("F5_REMOVE_SILENCE", "false").lower() in {"1", "true", "yes"}
 F5_SEED = os.getenv("F5_SEED")
 F5_REQUEST_TIMEOUT = float(os.getenv("F5_REQUEST_TIMEOUT", "300"))
 F5_CHUNK_DURATION = float(os.getenv("F5_CHUNK_DURATION", "0.5"))
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY","blah")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL","http://127.0.0.1:1234/v1") or None
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") or None
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
-OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "1024"))
-OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.8"))
+OPENAI_MAX_TOKENS = int(os.getenv("OPENAI_MAX_TOKENS", "512"))
+OPENAI_TEMPERATURE = float(os.getenv("OPENAI_TEMPERATURE", "0.7"))
 
 if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY environment variable is required.")
@@ -159,10 +159,20 @@ def generate_response(messages: Sequence[dict[str, str]]) -> str:
 # --- FastRTC Handler ------------------------------------------------------------------
 
 def response(
-    audio: tuple[int, NDArray[np.int16 | np.float32]],
+    audio: tuple[int, NDArray[np.int16 | np.float32]] | None,
     chatbot: List[dict[str, str]] | None = None,
+    event: object | None = None,
 ):
-    chatbot = chatbot or []
+    """Handle audio from the user, returning streamed audio + chatbot updates."""
+
+    if event is not None:
+        print("ReplyOnPause event:", event)
+
+    if audio is None:
+        # FastRTC can invoke the handler with no audio payload during setup/teardown.
+        return
+
+    chatbot = list(chatbot or [])
     messages: List[dict[str, str]] = [
         {"role": entry["role"], "content": entry["content"]} for entry in chatbot
     ]
