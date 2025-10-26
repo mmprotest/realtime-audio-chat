@@ -29,7 +29,7 @@ FASTER_WHISPER_BEAM_SIZE = int(os.getenv("FASTER_WHISPER_BEAM_SIZE", "5"))
 FASTER_WHISPER_TIMEOUT = float(os.getenv("FASTER_WHISPER_TIMEOUT", "120"))
 
 F5_TTS_API_URL = os.getenv("F5_TTS_API_URL", "http://127.0.0.1:8000").rstrip("/")
-F5_REFERENCE_AUDIO = os.getenv("F5_REFERENCE_AUDIO", "")
+F5_REFERENCE_AUDIO = os.getenv("F5_REFERENCE_AUDIO", "morgan.mp3")
 F5_REFERENCE_TEXT = os.getenv("F5_REFERENCE_TEXT", "")
 F5_REMOVE_SILENCE = os.getenv("F5_REMOVE_SILENCE", "false").lower() in {"1", "true", "yes"}
 F5_SEED = os.getenv("F5_SEED")
