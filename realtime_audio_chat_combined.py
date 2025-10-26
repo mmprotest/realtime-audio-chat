@@ -6,7 +6,8 @@ import io
 import json
 import os
 import time
-from typing import Iterable, List, Sequence
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Sequence
 
 import gradio as gr
 import numpy as np
@@ -47,16 +48,79 @@ if not OPENAI_API_KEY:
     raise RuntimeError("OPENAI_API_KEY environment variable is required.")
 
 if not F5_REFERENCE_AUDIO or not os.path.exists(F5_REFERENCE_AUDIO):
-    raise RuntimeError(
-        "F5_REFERENCE_AUDIO environment variable must point to an existing audio file."
-    )
+    F5_REFERENCE_AUDIO = ""
 
 if not F5_REFERENCE_TEXT:
-    raise RuntimeError("F5_REFERENCE_TEXT environment variable must contain the reference text.")
+    F5_REFERENCE_TEXT = ""
+
+def _convert_env_seed(seed: str | None) -> int | None:
+    try:
+        return int(seed) if seed not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+DEFAULT_VOICE_SETTINGS: Dict[str, Any] = {
+    "api_url": F5_TTS_API_URL,
+    "request_timeout": F5_REQUEST_TIMEOUT,
+    "reference_audio": F5_REFERENCE_AUDIO,
+    "reference_text": F5_REFERENCE_TEXT,
+    "remove_silence": F5_REMOVE_SILENCE,
+    "seed": _convert_env_seed(F5_SEED),
+}
+
+DEFAULT_STT_SETTINGS: Dict[str, Any] = {
+    "api_url": FASTER_WHISPER_API_URL,
+    "model_name": FASTER_WHISPER_MODEL,
+    "task": FASTER_WHISPER_TASK,
+    "language": FASTER_WHISPER_LANGUAGE,
+    "beam_size": FASTER_WHISPER_BEAM_SIZE,
+    "timeout": FASTER_WHISPER_TIMEOUT,
+}
 
 openai_client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
 
 # --- Helpers ---------------------------------------------------------------------------
+
+
+def _merge_voice_settings(overrides: Dict[str, Any] | None) -> Dict[str, Any]:
+    settings = dict(DEFAULT_VOICE_SETTINGS)
+    if overrides:
+        for key, value in overrides.items():
+            if value not in (None, ""):
+                settings[key] = value
+    return settings
+
+
+def _merge_stt_settings(overrides: Dict[str, Any] | None) -> Dict[str, Any]:
+    settings = dict(DEFAULT_STT_SETTINGS)
+    if overrides:
+        for key, value in overrides.items():
+            if value not in (None, ""):
+                settings[key] = value
+    return settings
+
+
+def _parse_seed_value(seed: Any) -> int | None:
+    if seed in (None, ""):
+        return None
+    try:
+        if isinstance(seed, str) and seed.strip() == "":
+            return None
+        return int(float(seed))
+    except (TypeError, ValueError) as exc:
+        raise gr.Error("Seed must be an integer value.") from exc
+
+
+def _validate_reference_audio(path: str | None) -> str:
+    if not path:
+        raise gr.Error(
+            "Please upload a reference audio sample (wav format recommended) or set F5_REFERENCE_AUDIO."
+        )
+    resolved = Path(path)
+    if not resolved.exists():
+        raise gr.Error(f"Reference audio file not found: {path}")
+    return str(resolved)
 
 def _to_wav_bytes(audio: tuple[int, NDArray[np.int16 | np.float32]]) -> io.BytesIO:
     sample_rate, samples = audio
@@ -70,23 +134,29 @@ def _to_wav_bytes(audio: tuple[int, NDArray[np.int16 | np.float32]]) -> io.Bytes
     return buffer
 
 
-def transcribe_audio(audio: tuple[int, NDArray[np.int16 | np.float32]]) -> str:
-    """Send audio to the local Faster Whisper API and return the transcription."""
+def transcribe_audio_with_settings(
+    audio: tuple[int, NDArray[np.int16 | np.float32]],
+    stt_settings: Dict[str, Any] | None,
+) -> str:
+    """Send audio to the Faster Whisper API using the provided settings."""
+
+    settings = _merge_stt_settings(stt_settings)
     wav_buffer = _to_wav_bytes(audio)
     files = {"file": ("audio.wav", wav_buffer, "audio/wav")}
-    data = {
-        "model_name": FASTER_WHISPER_MODEL,
-        "task": FASTER_WHISPER_TASK,
-        "beam_size": str(FASTER_WHISPER_BEAM_SIZE),
+    data: Dict[str, str] = {
+        "model_name": str(settings["model_name"]),
+        "task": str(settings["task"]),
+        "beam_size": str(int(settings["beam_size"])),
     }
-    if FASTER_WHISPER_LANGUAGE:
-        data["language"] = FASTER_WHISPER_LANGUAGE
+    language = str(settings.get("language", "")).strip()
+    if language:
+        data["language"] = language
 
     response = requests.post(
-        f"{FASTER_WHISPER_API_URL}/transcribe",
+        f"{settings['api_url']}/transcribe",
         files=files,
         data=data,
-        timeout=FASTER_WHISPER_TIMEOUT,
+        timeout=float(settings["timeout"]),
     )
     response.raise_for_status()
     payload = response.json()
@@ -103,28 +173,41 @@ def _iter_audio_chunks(audio: np.ndarray, sample_rate: int) -> Iterable[NDArray[
         yield audio[..., start:end]
 
 
-def synthesize_speech(text: str) -> tuple[int, Iterable[NDArray[np.float32]]]:
-    """Use the F5-TTS API to synthesize speech for the given text."""
-    with open(F5_REFERENCE_AUDIO, "rb") as ref_file:
+def synthesize_speech_with_settings(
+    text: str, voice_settings: Dict[str, Any] | None
+) -> tuple[int, Iterable[NDArray[np.float32]]]:
+    """Use the F5-TTS API to synthesize speech for the given text and settings."""
+
+    settings = _merge_voice_settings(voice_settings)
+    reference_audio = _validate_reference_audio(settings.get("reference_audio"))
+    reference_text = settings.get("reference_text", "").strip()
+    if not reference_text:
+        raise gr.Error("Reference text cannot be empty.")
+
+    seed_value = settings.get("seed")
+    if seed_value not in (None, ""):
+        seed_value = _parse_seed_value(seed_value)
+
+    with open(reference_audio, "rb") as ref_file:
         files = {
             "reference_audio": (
-                os.path.basename(F5_REFERENCE_AUDIO) or "reference.wav",
+                os.path.basename(reference_audio) or "reference.wav",
                 ref_file,
                 "audio/wav",
             )
         }
-        data = {
-            "reference_text": F5_REFERENCE_TEXT,
+        data: Dict[str, str] = {
+            "reference_text": reference_text,
             "target_text": text,
-            "remove_silence": str(F5_REMOVE_SILENCE).lower(),
+            "remove_silence": str(bool(settings.get("remove_silence", False))).lower(),
         }
-        if F5_SEED:
-            data["seed"] = F5_SEED
+        if seed_value is not None:
+            data["seed"] = str(seed_value)
         response = requests.post(
-            f"{F5_TTS_API_URL}/infer",
+            f"{settings['api_url']}/infer",
             data=data,
             files=files,
-            timeout=F5_REQUEST_TIMEOUT,
+            timeout=float(settings["request_timeout"]),
         )
     response.raise_for_status()
     payload = response.json()
@@ -142,6 +225,85 @@ def synthesize_speech(text: str) -> tuple[int, Iterable[NDArray[np.float32]]]:
     else:
         wav = wav.T
     return sample_rate, _iter_audio_chunks(wav, sample_rate)
+
+
+def _fetch_available_models(api_url: str) -> List[str]:
+    try:
+        response = requests.get(f"{api_url}/models", timeout=10)
+        response.raise_for_status()
+    except requests.RequestException:
+        return [DEFAULT_STT_SETTINGS["model_name"]]
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return [DEFAULT_STT_SETTINGS["model_name"]]
+
+    models = payload.get("available_models")
+    if not isinstance(models, list) or not models:
+        return [DEFAULT_STT_SETTINGS["model_name"]]
+
+    return [str(model) for model in models]
+
+
+def apply_voice_settings(
+    reference_audio: str | None,
+    reference_text: str,
+    seed: Any,
+    remove_silence: bool,
+    state: Dict[str, Any] | None,
+) -> tuple[Dict[str, Any], str]:
+    settings = _merge_voice_settings(state)
+    if reference_audio:
+        settings["reference_audio"] = reference_audio
+
+    reference_path = settings.get("reference_audio")
+    settings["reference_audio"] = _validate_reference_audio(reference_path)
+
+    text_value = reference_text.strip()
+    if not text_value:
+        raise gr.Error("Reference text cannot be empty.")
+    settings["reference_text"] = text_value
+
+    settings["remove_silence"] = bool(remove_silence)
+    settings["seed"] = _parse_seed_value(seed)
+
+    confirmation = "✅ Voice cloning settings updated."
+    return settings, confirmation
+
+
+def apply_stt_settings(
+    api_url: str,
+    model_name: str,
+    language: str,
+    task: str,
+    beam_size: int,
+    state: Dict[str, Any] | None,
+) -> tuple[Dict[str, Any], str]:
+    if not api_url:
+        raise gr.Error("Please provide the Faster Whisper API URL.")
+
+    settings = _merge_stt_settings(state)
+    settings["api_url"] = api_url.rstrip("/")
+
+    if not model_name:
+        raise gr.Error("Please select a Faster Whisper model.")
+    settings["model_name"] = model_name
+    settings["task"] = task
+    settings["language"] = language.strip()
+    settings["beam_size"] = int(beam_size)
+
+    confirmation = f"✅ Speech-to-text settings saved (model: {model_name})."
+    return settings, confirmation
+
+
+def refresh_stt_model_choices(api_url: str, current_model: str) -> tuple[dict[str, Any], str]:
+    sanitized_url = api_url.rstrip("/") if api_url else DEFAULT_STT_SETTINGS["api_url"]
+    models = _fetch_available_models(sanitized_url)
+    selected = current_model if current_model in models else models[0]
+    dropdown_update = gr.Dropdown.update(choices=models, value=selected)
+    status = f"✅ Loaded {len(models)} model option(s)."
+    return dropdown_update, status
 
 
 def generate_response(messages: Sequence[dict[str, str]]) -> str:
@@ -207,6 +369,8 @@ def _normalize_chat_history(
 def response(
     audio: tuple[int, NDArray[np.int16 | np.float32]] | None,
     chatbot: List[dict[str, str]] | str | dict | None = None,
+    voice_settings: Dict[str, Any] | None = None,
+    stt_settings: Dict[str, Any] | None = None,
     event: object | None = None,
 ):
     """Handle audio from the user, returning streamed audio + chatbot updates."""
@@ -222,7 +386,7 @@ def response(
     messages: List[dict[str, str]] = list(chatbot)
 
     start = time.time()
-    user_text = transcribe_audio(audio)
+    user_text = transcribe_audio_with_settings(audio, stt_settings)
     print("Transcription latency:", time.time() - start)
     print("User said:", user_text)
 
@@ -234,25 +398,139 @@ def response(
     assistant_text = generate_response(messages)
     chatbot.append({"role": "assistant", "content": assistant_text})
 
-    sample_rate, audio_chunks = synthesize_speech(assistant_text)
+    sample_rate, audio_chunks = synthesize_speech_with_settings(
+        assistant_text, voice_settings
+    )
     for chunk in audio_chunks:
         yield (sample_rate, chunk.astype(np.float32))
     yield AdditionalOutputs(chatbot)
 
 
 chatbot_component = gr.Chatbot(type="messages")
+voice_settings_state = gr.State(dict(DEFAULT_VOICE_SETTINGS))
+stt_settings_state = gr.State(dict(DEFAULT_STT_SETTINGS))
+
 stream = Stream(
     modality="audio",
     mode="send-receive",
     handler=ReplyOnPause(response, input_sample_rate=16000),
     additional_outputs_handler=lambda audio, updated_history: updated_history,
-    additional_inputs=[chatbot_component],
+    additional_inputs=[chatbot_component, voice_settings_state, stt_settings_state],
     additional_outputs=[chatbot_component],
     rtc_configuration=get_twilio_turn_credentials() if get_space() else None,
     concurrency_limit=5 if get_space() else None,
     time_limit=90 if get_space() else None,
     ui_args={"title": "Realtime Audio Chat (Whisper STT + F5-TTS + OpenAI-compatible LLM)"},
 )
+
+
+with stream.ui:
+    gr.Markdown(
+        """
+        ## Realtime Audio Chat Controls
+
+        Configure the voice cloning and speech-to-text options below. The realtime conversation will use
+        these settings for synthesizing assistant replies and transcribing your microphone input.
+        """
+    )
+
+    with gr.Row():
+        with gr.Column(scale=1, min_width=320):
+            gr.Markdown("### F5-TTS Voice Cloning")
+            voice_reference_audio = gr.Audio(
+                label="Reference Audio",
+                sources=["upload"],
+                type="filepath",
+                value=DEFAULT_VOICE_SETTINGS["reference_audio"] or None,
+                interactive=True,
+            )
+            voice_reference_text = gr.Textbox(
+                label="Reference Text",
+                lines=3,
+                value=DEFAULT_VOICE_SETTINGS["reference_text"],
+            )
+            with gr.Row():
+                voice_seed_input = gr.Number(
+                    label="Seed",
+                    value=DEFAULT_VOICE_SETTINGS["seed"],
+                )
+                voice_remove_silence = gr.Checkbox(
+                    label="Remove Silence",
+                    value=bool(DEFAULT_VOICE_SETTINGS["remove_silence"]),
+                )
+            voice_apply_button = gr.Button("Save Voice Settings")
+            voice_status = gr.Markdown()
+
+        with gr.Column(scale=1, min_width=320):
+            gr.Markdown("### Faster Whisper Speech-to-Text")
+            stt_api_url_input = gr.Textbox(
+                label="API URL",
+                value=DEFAULT_STT_SETTINGS["api_url"],
+            )
+
+            models = _fetch_available_models(DEFAULT_STT_SETTINGS["api_url"])
+            default_model = (
+                DEFAULT_STT_SETTINGS["model_name"]
+                if DEFAULT_STT_SETTINGS["model_name"] in models
+                else models[0]
+            )
+
+            stt_model_dropdown = gr.Dropdown(
+                choices=models,
+                value=default_model,
+                label="Model",
+            )
+            stt_refresh_button = gr.Button("Refresh Model List")
+            stt_language_box = gr.Textbox(
+                label="Language (optional)",
+                value=DEFAULT_STT_SETTINGS["language"],
+                placeholder="Leave blank to auto-detect",
+            )
+            stt_task_radio = gr.Radio(
+                choices=["transcribe", "translate"],
+                value=DEFAULT_STT_SETTINGS["task"],
+                label="Task",
+            )
+            stt_beam_slider = gr.Slider(
+                minimum=1,
+                maximum=10,
+                step=1,
+                value=int(DEFAULT_STT_SETTINGS["beam_size"]),
+                label="Beam Size",
+            )
+            stt_apply_button = gr.Button("Save STT Settings")
+            stt_status = gr.Markdown()
+
+    voice_apply_button.click(
+        apply_voice_settings,
+        inputs=[
+            voice_reference_audio,
+            voice_reference_text,
+            voice_seed_input,
+            voice_remove_silence,
+            voice_settings_state,
+        ],
+        outputs=[voice_settings_state, voice_status],
+    )
+
+    stt_refresh_button.click(
+        refresh_stt_model_choices,
+        inputs=[stt_api_url_input, stt_model_dropdown],
+        outputs=[stt_model_dropdown, stt_status],
+    )
+
+    stt_apply_button.click(
+        apply_stt_settings,
+        inputs=[
+            stt_api_url_input,
+            stt_model_dropdown,
+            stt_language_box,
+            stt_task_radio,
+            stt_beam_slider,
+            stt_settings_state,
+        ],
+        outputs=[stt_settings_state, stt_status],
+    )
 
 app = FastAPI()
 app = gr.mount_gradio_app(app, stream.ui, path="/")
